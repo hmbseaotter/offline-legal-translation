@@ -87,21 +87,45 @@ def norm_nums(s):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tsv", default=trlib.path("work", "lint-report.tsv"))
+    ap.add_argument("--all-versions", action="store_true",
+                    help="include segments from superseded models and prompt "
+                         "versions (default: only what tr-run would use now)")
     a = ap.parse_args()
 
     dbp = trlib.path("work", "tm.sqlite")
     if not os.path.exists(dbp):
         sys.exit("no translation memory yet - nothing to check")
     db = sqlite3.connect(dbp)
-    rows = db.execute("SELECT src, tgt, direction FROM tm").fetchall()
+    # The memory keys on (direction, model, prompt_version, source), so a
+    # prompt-version bump leaves the old rows in place -- correctly, since
+    # invariant 6 says they must not be reused. Linting across all of them
+    # meant every segment retranslated under a new prompt appeared twice and
+    # reported as INCON: bumping the version, which invariant 6 requires,
+    # made the whole corpus look inconsistent. The default is what tr-run
+    # would actually reuse today.
+    if a.all_versions:
+        rows = db.execute(
+            "SELECT src, tgt, direction, model, prompt_version FROM tm").fetchall()
+    else:
+        rows = db.execute(
+            "SELECT src, tgt, direction, model, prompt_version FROM tm "
+            "WHERE model = ? AND prompt_version = ?",
+            (trlib.MODEL, trlib.PROMPT_VERSION)).fetchall()
+        if not rows:
+            sys.exit(f"no segments for model {trlib.MODEL} prompt "
+                     f"{trlib.PROMPT_VERSION} - run tr-run, or use "
+                     f"--all-versions to inspect superseded ones")
     db.close()
 
     gloss = trlib.load_glossary()
     findings = []
     by_src = collections.defaultdict(set)
 
-    for src, tgt, direction in rows:
-        by_src[(src, direction)].add(tgt)
+    for src, tgt, direction, model, pver in rows:
+        # Grouped by model and prompt version too: INCON should mean "the
+        # same input, under identical conditions, produced two different
+        # outputs", not "the prompt changed since last time".
+        by_src[(src, direction, model, pver)].add(tgt)
 
         if tgt.startswith("[TRANSLATION FAILED]"):
             findings.append(("FAIL", "translation errored", src, tgt)); continue
@@ -149,7 +173,7 @@ def main():
                 if frag not in tgt and (want == frag or want not in tgt):
                     findings.append(("NONTR", f"'{frag}' altered or dropped", src, tgt))
 
-    for (src, direction), tgts in by_src.items():
+    for (src, direction, _model, _pver), tgts in by_src.items():
         if len(tgts) > 1:
             findings.append(("INCON", f"{len(tgts)} different translations",
                              src, " || ".join(sorted(tgts))))
