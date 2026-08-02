@@ -79,9 +79,65 @@ def make_xlsx(path, rows):
     wb.save(path)
     print(f"  {path}  ({rows} rows, high repeat ratio by design)")
 
+# A real client drop is not a clean Slovene corpus: it arrives as nested
+# folders mixing languages, and tr-inventory has to sort them out. Triage
+# cannot be developed without something to triage, and the one thing that
+# must never be used for that is the actual client material -- so the mixed
+# tree is synthesised here too. Invented, like everything else in this file.
+OTHER_LANG = {
+ "hr": "Optuženi je pred Županijskim sudom u Zagrebu priznao počinjenje "
+       "kaznenog djela te je sud donio rješenje o određivanju istražnog "
+       "zatvora. Oštećenik je podnio imovinskopravni zahtjev, a državno "
+       "odvjetništvo predložilo je provođenje dodatnih dokaznih radnji "
+       "radi utvrđivanja svih odlučnih činjenica u ovom kaznenom postupku.",
+ "en": "The witness confirmed that the transfer had been authorised by the "
+       "managing director and that the supporting documentation was filed "
+       "with the registry on the following working day. Counsel for the "
+       "defence objected to the admission of the exhibit and asked the court "
+       "to rule on its authenticity before any further evidence was heard.",
+ "hy": "Դատարանը քննության առավ գործը և որոշեց, որ ներկայացված ապացույցները "
+       "բավարար են մեղադրանքի հիմնավորման համար։ Կողմերը ներկայացրին իրենց "
+       "դիրքորոշումները, իսկ դատավարությունը հետաձգվեց մինչև հաջորդ նիստը, "
+       "որպեսզի լրացուցիչ փաստաթղթեր ներկայացվեն գործի քննության ընթացքում։",
+}
+
+def make_mixed(root):
+    """A nested, two-drop, mixed-language tree -- the shape clients send."""
+    plan = [
+        ("drop-A/2024/ovadba/ovadba.docx",            "sl"),
+        ("drop-A/2024/ovadba/priloge/priloga-01.docx", "sl"),
+        ("drop-A/2024/zapisniki/zapisnik.docx",       "sl"),
+        ("drop-B/exhibits/ugovor.docx",               "hr"),
+        ("drop-B/exhibits/emails/mail-001.txt",       "en"),
+        ("drop-B/exhibits/emails/nakon.txt",          "hr"),
+        ("drop-B/exhibits/prevod/hayeren.txt",        "hy"),
+        ("drop-B/misc/kratko.txt",                    "short"),
+    ]
+    for rel, lang in plan:
+        p = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if lang == "sl":
+            body = " ".join(PARAS)
+        elif lang == "short":
+            body = "Sklep."
+        else:
+            body = OTHER_LANG[lang] + " " + OTHER_LANG[lang]
+        if p.endswith(".docx"):
+            d = docx.Document()
+            d.add_heading(random.choice(HEADINGS), 1)
+            for chunk in (body[i:i+700] for i in range(0, len(body), 700)):
+                d.add_paragraph(chunk)
+            d.save(p)
+        else:
+            open(p, "w", encoding="utf-8").write(body + "\n")
+        print(f"  {rel}  [{lang}]")
+
 print("synthetic fixtures (invented content, no real case data):")
 for i, hd in enumerate(HEADINGS, 1):
     make_docx(os.path.join(OUT, f"primer-{i:02d}.docx"), hd, 4 + i)
 make_xlsx(os.path.join(OUT, "dokazi-mala.xlsx"), 200)
 make_xlsx(os.path.join(OUT, "dokazi-velika.xlsx"), 7000)
+print("\nmixed-language drop (for tr-inventory):")
+make_mixed(os.path.join(OUT, "drop"))
 print("\nnext:  tr-xlsx", os.path.join(OUT, "dokazi-velika.xlsx"), "--survey")
+print("       tr-inventory        (with source/ pointed at the drop above)")
