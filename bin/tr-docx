@@ -25,19 +25,53 @@ def set_paragraph_text(par, text):
     for r in runs[1:]:
         r.text = ""
 
-def iter_paragraphs(doc):
-    """Body paragraphs plus every paragraph inside every table cell."""
-    for par in doc.paragraphs:
-        yield par
-    for tbl in doc.tables:
-        for row in tbl.rows:
-            for cell in row.cells:
-                for par in cell.paragraphs:
-                    yield par
-    for sec in doc.sections:
-        for hf in (sec.header, sec.footer):
-            for par in hf.paragraphs:
+def _walk_table(tbl):
+    """A table's paragraphs, including any table nested inside its cells.
+
+    doc.tables lists top-level tables only. A table nested in a cell was
+    therefore never yielded and never translated -- it stayed in the source
+    language, silently, inside an otherwise finished document. Exhibit
+    schedules and annexes nest routinely, so this is not a corner case.
+    """
+    for row in tbl.rows:
+        for cell in row.cells:
+            for par in cell.paragraphs:
                 yield par
+            for inner in cell.tables:
+                yield from _walk_table(inner)
+
+def iter_paragraphs(doc):
+    """Body paragraphs, table cells at any depth, headers and footers.
+
+    Deduplicated: a horizontally merged cell is returned once per grid
+    column it spans, so its paragraphs would otherwise be counted, and
+    reported on, several times over.
+
+    NOT covered: footnotes, endnotes, comments and text boxes. python-docx
+    exposes no API for them, so their text passes through untranslated.
+    Check any document that uses them.
+    """
+    seen = set()
+
+    def fresh(par):
+        if par._p in seen:
+            return False
+        seen.add(par._p)
+        return True
+
+    def sources():
+        yield from doc.paragraphs
+        for tbl in doc.tables:
+            yield from _walk_table(tbl)
+        for sec in doc.sections:
+            for hf in (sec.header, sec.footer):
+                yield from hf.paragraphs
+                for tbl in hf.tables:
+                    yield from _walk_table(tbl)
+
+    for par in sources():
+        if fresh(par):
+            yield par
 
 def main():
     ap = argparse.ArgumentParser()
