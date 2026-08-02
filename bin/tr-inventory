@@ -335,6 +335,27 @@ def main():
                                    limit=limit, full_ocr=a.with_ocr)
             if text:
                 lang, conf, note = det.detect(text)
+                # Counting reads the whole file where triage read 400 words,
+                # so it can legitimately reach a different verdict -- a
+                # bilingual bank statement is the usual case. Say so rather
+                # than letting the language change between two runs of what
+                # looks like the same command.
+                if old and old.get("lang") and old["lang"] != lang:
+                    note = ((note + "; ") if note else "") + \
+                        f"language revised from {old['lang']} on the full text"
+            elif a.count and old and old.get("lang") not in (None, "", "unknown"):
+                # Could not COUNT it -- which is not the same as not knowing
+                # what language it is. A scanned PDF that triage identified
+                # from a sample keeps that identification; only the word
+                # count is missing. Overwriting it with "unknown" hid four
+                # correctly-detected Slovene PDFs among the undetermined and
+                # would have dropped them from the next tr-run.
+                lang = old["lang"]
+                try:
+                    conf = float(old.get("confidence") or 0.0)
+                except ValueError:
+                    conf = 0.0
+                note = method
             else:
                 lang, conf, note = "unknown", 0.0, method
             row = {"path": rel, "ext": ext, "bytes": str(st.st_size),
