@@ -56,9 +56,23 @@ def main():
         print("\n  most repeated values:", file=sys.stderr)
         for s, n in counter.most_common(20):
             print(f"    {n:6,}  {s[:70]}", file=sys.stderr)
-        est = len(uniq) * 15 / 4 / 3600
-        print(f"\n  rough translation time at 4 tok/s: {est:.1f} h "
-              f"(vs {total*15/4/3600:.1f} h without dedup)", file=sys.stderr)
+        # Measured on this machine with gams3:q8, not assumed. 12 samples of
+        # real pipeline traffic: prefill 7.00 tok/s, generation 2.20 tok/s,
+        # 48.3 s of wall clock per segment end to end.
+        #
+        # Estimating from a generation rate alone was optimistic by ~5x,
+        # because most of a segment's cost is not generation. Every call
+        # re-reads a ~200-token system prompt at 7 tok/s -- about 28 s -- and
+        # pays it whether the cell holds a sentence or two words. So the
+        # figure below is a per-segment cost, not tokens over a rate. Short
+        # cells are cheaper than this, but only by the generation part; the
+        # prefill floor is paid regardless.
+        SEC_PER_SEGMENT = 48.3
+        est = len(uniq) * SEC_PER_SEGMENT / 3600
+        print(f"\n  rough translation time at {SEC_PER_SEGMENT:.0f}s/segment "
+              f"(measured): {est:.1f} h "
+              f"(vs {total * SEC_PER_SEGMENT / 3600:.0f} h without dedup)",
+              file=sys.stderr)
         return
 
     gloss = trlib.load_glossary()
