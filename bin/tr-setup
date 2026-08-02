@@ -10,9 +10,13 @@ echo "    projects:   tr-project --new <name>"
 
 echo "==> system packages"
 sudo apt update -qq
+# lsof is not optional: case-close uses it to report which processes still
+# hold the mount open. Without it that report is silently empty and you get
+# a bare "target is busy" instead -- the exact failure case-close was
+# written to explain.
 sudo apt install -y ocrmypdf poppler-utils \
      tesseract-ocr tesseract-ocr-slv tesseract-ocr-eng tesseract-ocr-deu \
-     python3-pip python3-venv qpdf unpaper
+     python3-pip python3-venv qpdf unpaper lsof
 
 echo "==> python environment (outside the container, so it survives unmount)"
 python3 -m venv "$VENV"
@@ -38,6 +42,23 @@ if ! grep -qF "$KIT/bin" "$HOME/.bashrc" 2>/dev/null; then
   # where the real claude launcher lives, for the shadowing to work.
   echo "export PATH=\"\$HOME/.local/sbin:\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"
   echo "    added to ~/.bashrc - run: source ~/.bashrc"
+fi
+
+echo "==> git hooks"
+# Nothing else installs these. .gitignore keeps documents out of the repo by
+# accident; .githooks/pre-commit is what stops `git add -f` putting one in
+# deliberately, and it never runs unless core.hooksPath points at it -- a
+# global core.hooksPath (this workspace sets one) shadows .git/hooks
+# entirely. .githooks/pre-commit chains back to the global hook itself.
+if ! command -v git >/dev/null; then
+  echo "    git not installed - skipping"
+elif [[ -d "$KIT/.git" ]]; then
+  git -C "$KIT" config core.hooksPath .githooks
+  echo "    core.hooksPath=.githooks - the document blocker is active"
+else
+  echo "    $KIT is not a git repository yet. If you version the kit, run:"
+  echo "      git -C \"$KIT\" config core.hooksPath .githooks"
+  echo "    Until then a client document can be committed with git add -f."
 fi
 
 echo

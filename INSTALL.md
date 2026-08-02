@@ -20,6 +20,15 @@ source ~/.bashrc
 "$KIT"/bin/tr-setup
 ```
 
+`tr-setup` points the repository at `.githooks` for you. If you unpack the
+kit somewhere that is already a git repository and skip `tr-setup`, do it
+by hand — a global `core.hooksPath` shadows `.git/hooks` entirely, so until
+this is set the hook that keeps client documents out of the repo never runs:
+
+```bash
+git -C "$KIT" config core.hooksPath .githooks
+```
+
 Then follow `~/translation-work/docs/01-operating-manual` §3.
 
 ## Why this location
@@ -42,6 +51,8 @@ glossary/     templates; case-init seeds _shared/ from these
 prompts/      system prompt template
 CLAUDE.md     read by Claude Code at session start — states the data boundary
 .claude/      permission rules (a backstop, not the primary control)
+.githooks/    pre-commit blocks client documents; pre-push guards the remote.
+              Inert until core.hooksPath points here — see above
 ```
 
 ## First commands
