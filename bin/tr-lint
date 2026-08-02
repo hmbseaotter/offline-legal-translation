@@ -98,9 +98,9 @@ def main():
     db = sqlite3.connect(dbp)
     # The memory keys on (direction, model, prompt_version, source), so a
     # prompt-version bump leaves the old rows in place -- correctly, since
-    # invariant 6 says they must not be reused. Linting across all of them
+    # invariant 7 says they must not be reused. Linting across all of them
     # meant every segment retranslated under a new prompt appeared twice and
-    # reported as INCON: bumping the version, which invariant 6 requires,
+    # reported as INCON: bumping the version, which invariant 7 requires,
     # made the whole corpus look inconsistent. The default is what tr-run
     # would actually reuse today.
     if a.all_versions:

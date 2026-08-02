@@ -146,12 +146,28 @@ Do not change these without discussing with the operator first.
    Two files hold the prompt — `prompts/translate.txt` (the seed `case-init`
    copies into `_shared/`) and `_DEFAULT_PROMPT` in `lib/trlib.py` (the
    fallback). **They must say the same thing**, and changing either means
-   bumping `TR_PROMPT_VERSION` under invariant 6.
-6. **The memory is the resume state.** `work/tm.sqlite` keys on
+   bumping `TR_PROMPT_VERSION` under invariant 7.
+6. **A completed provision is an interpretation, not a translation.** Asked
+   to translate a source that quotes a statute or treaty and stops short of
+   the famous continuation, the model supplies the rest from memory —
+   measured at 2 of 10 well-known provisions, both ECHR article 6. The
+   addition reads perfectly and contains no number, glossary term or
+   non-translatable fragment, so **no deterministic check can see it**, and
+   no prompt tested has prevented it: four variants failed identically, and
+   an explicit instruction against it made no difference.
+   What is detectable is the *context* — `trlib.flagged()` marks any segment
+   citing a statute or treaty, for word-by-word review. Asking the model to
+   audit its own output against the source (`prompts/audit.txt`) caught 6/6
+   real additions with 0/15 false positives at ~12 s a segment; gated on the
+   citation flag that is roughly +2% on a run, against +400% ungated.
+   Not yet wired into a tool: `tr-lint` runs no model (invariant 8), so an
+   audit pass belongs elsewhere. The blind spot is a famous provision
+   paraphrased without a citation marker.
+7. **The memory is the resume state.** `work/tm.sqlite` keys on
    `sha256(direction, model, prompt_version, source)`. Changing the prompt
    must bump `TR_PROMPT_VERSION` or stale translations get reused.
-7. **`tr-lint` runs no model.** It must stay deterministic and fast.
-8. **Projects are isolated.** Each has its own `work/tm.sqlite`. Translation
+8. **`tr-lint` runs no model.** It must stay deterministic and fast.
+9. **Projects are isolated.** Each has its own `work/tm.sqlite`. Translation
    memory must never be shared across matters — different clients, different
    confidentiality obligations. Glossary layers (shared base + project
    overlay); memory does not.

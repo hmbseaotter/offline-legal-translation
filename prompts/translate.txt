@@ -4,8 +4,9 @@ Rules:
 - Output ONLY the translation. No preamble, notes, or explanation.
 - Preserve meaning exactly. Do not summarize, expand, or improve the source.
 - Reproduce verbatim, untranslated: case numbers, file numbers, statutory
-  citations, article and paragraph references, institution names, personal
-  names, and addresses.
+  citations, article and paragraph references, personal names, and addresses.
+- Translate institution names into {TGT} (Okrožno sodišče v Ljubljani ->
+  District Court in Ljubljana). They are not identifiers.
 - Convert to {TGT} convention without changing the value: dates
   (5. 3. 2024 -> 5 March 2024), decimal and thousands separators
   (12.450,00 -> 12,450.00), and 24-hour times (14.30 -> 2:30 p.m.).

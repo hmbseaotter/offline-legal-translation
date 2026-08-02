@@ -198,10 +198,15 @@ MODEL = os.environ.get("TR_MODEL", "gams3:q8")
 OLLAMA = os.environ.get("TR_OLLAMA", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
 # v2: the prompt stopped ordering dates and amounts reproduced verbatim and
-# started requiring locale conversion. Invariant 6 -- the memory keys on this,
-# so anything cached under v1 was produced under the opposite instruction and
-# must not be reused.
-PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v2")
+# started requiring locale conversion.
+# v3: institution names are translated, not reproduced verbatim. The verbatim
+# rule had listed them alongside case numbers, and two models read it two
+# ways -- qwen3.6 left "Okrožnim sodiščem v Ljubljani" in Slovene, which the
+# rule as written permitted, while gams3 translated it. A court's name is
+# not an identifier, so the rule was wrong rather than ambiguous.
+# Invariant 7 -- the memory keys on this, so anything cached under an earlier
+# version was produced under a different instruction and must not be reused.
+PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v3")
 
 def path(*p):
     return os.path.join(require_root(), *p)
@@ -299,6 +304,50 @@ def nontranslatables():
                     pats.append(re.compile(ln))
         _NONTRANS_CACHE = pats
     return _NONTRANS_CACHE
+
+# ----------------------------------------------------------- citation gate
+
+# The model completes provisions it knows by heart. Asked to translate a
+# source that stops short of the famous continuation, it supplies the rest:
+# measured at 2 of 10 well-known provisions, and both failures were ECHR
+# article 6 -- the most quoted text in criminal procedure. The addition reads
+# perfectly, contains no number, no glossary term and no non-translatable
+# fragment, so nothing deterministic can see it. It is an interpretation
+# presented as a translation.
+#
+# What IS deterministic is the condition: the source citing a statute or
+# treaty. Flagging that costs nothing and cannot miss an explicit citation,
+# which makes it a cheap gate for an expensive check -- an audit pass on the
+# flagged fraction rather than the whole corpus. Measured, that is the
+# difference between roughly +2% and +400%.
+#
+# The blind spot is stated rather than hidden: a famous provision paraphrased
+# with no citation marker is not flagged. This bounds the risk; it does not
+# remove it.
+
+_CITE_RE = re.compile(
+    r"""(
+        \bčl\.|\bčlen\w*|\bodst\.|\bodstav\w*|\btočk\w*|\balinej\w*
+      | \bUstav\w*|\bEKČP\b|\bEKPČ\b|\bKonvencij\w*
+      | \b(?:KZ|ZKP|ZPP|ZUP|ZIZ|ZUS|ZDR|ZGD|ZPIZ|ZDavP|ZFPPIPP|ZASP|OZ|SPZ)\b(?:-\d+[A-Z]?)?
+      | \bUradni\s+list\b|\bUr\.\s?l\.
+    )""",
+    re.IGNORECASE | re.VERBOSE)
+
+
+def cites(text):
+    """Distinct citation markers in a source segment."""
+    return sorted({m.group(0) for m in _CITE_RE.finditer(text or "")},
+                  key=str.lower)
+
+
+def flagged(text):
+    """True when a segment cites a statute or treaty, and so warrants the
+    word-by-word check. High recall by design: a segment flagged unnecessarily
+    costs a reviewer seconds, one missed puts an interpretation into a
+    certified translation."""
+    return bool(_CITE_RE.search(text or ""))
+
 
 # ------------------------------------------------------- locale conversion
 
@@ -475,8 +524,9 @@ Rules:
 - Output ONLY the translation. No preamble, notes, or explanation.
 - Preserve meaning exactly. Do not summarize, expand, or improve the source.
 - Reproduce verbatim, untranslated: case numbers, file numbers, statutory
-  citations, article and paragraph references, institution names, personal
-  names, and addresses.
+  citations, article and paragraph references, personal names, and addresses.
+- Translate institution names into {TGT} (Okrožno sodišče v Ljubljani ->
+  District Court in Ljubljana). They are not identifiers.
 - Convert to {TGT} convention without changing the value: dates
   (5. 3. 2024 -> 5 March 2024), decimal and thousands separators
   (12.450,00 -> 12,450.00), and 24-hour times (14.30 -> 2:30 p.m.).
