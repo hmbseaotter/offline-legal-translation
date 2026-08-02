@@ -32,5 +32,9 @@ rm -rf "$TMP"
 echo
 ollama show "$NAME" | head -20
 echo
-echo "Set this in your shell (tr-setup adds it to ~/.bashrc):"
-echo "  export TR_MODEL=$NAME"
+if [[ "$NAME" == "gams3:q8" ]]; then
+  echo "Nothing to set: gams3:q8 is the default every script already uses."
+else
+  echo "Registered under a non-default name, so tell the scripts about it:"
+  echo "  export TR_MODEL=$NAME          # add to ~/.bashrc to make it stick"
+fi
