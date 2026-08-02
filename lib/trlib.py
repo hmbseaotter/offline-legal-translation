@@ -45,6 +45,28 @@ PROJECTS = os.environ.get(
     os.path.expanduser("~/translation-work/confidential-projects"))
 SHARED = os.path.join(PROJECTS, "_shared")
 
+# An explicit TR_PROJECTS is a deliberate act -- fixtures, a mock-server run,
+# a throwaway root. The mount requirement below applies only to the real
+# container path, so those workflows keep working.
+PROJECTS_OVERRIDDEN = "TR_PROJECTS" in os.environ
+
+def _under(child, parent):
+    p = os.path.realpath(parent)
+    return os.path.realpath(child) == p or os.path.realpath(child).startswith(p + os.sep)
+
+def container_mounted():
+    """Is the encrypted container actually open?
+
+    The mountpoint directory exists whether or not anything is mounted on it
+    -- when the container is closed it is simply an empty directory, and if
+    case-init has never run it is a plain directory like any other. So
+    os.path.isdir() answers "does the path exist", not "is the container
+    open", and a tool that trusts it will write plaintext case material to
+    the bare mountpoint, outside the encryption, without saying a word.
+    ismount() is the only test that answers the question being asked.
+    """
+    return os.path.ismount(PROJECTS)
+
 def _resolve_root():
     """TR_ROOT wins. Otherwise use the active project recorded in .active."""
     explicit = os.environ.get("TR_ROOT")
@@ -60,7 +82,22 @@ def _resolve_root():
 ROOT = _resolve_root()
 
 def require_root():
-    """Fail loudly rather than writing into the wrong project."""
+    """Fail loudly rather than writing into the wrong project.
+
+    Refuses outright when the target sits under a container that is not
+    mounted: that is not "no project yet", it is "you are about to write
+    case material to an unencrypted directory".
+    """
+    if (ROOT and _under(ROOT, PROJECTS)
+            and not PROJECTS_OVERRIDDEN and not container_mounted()):
+        sys.stderr.write(
+            "\nThe case container is NOT mounted.\n"
+            f"  mountpoint: {PROJECTS}\n"
+            "  Anything written there now would be plaintext, outside the\n"
+            "  encryption. Refusing.\n"
+            "  open it:    case-open        (check first: case-status)\n"
+            "  never set up? case-init 40G\n\n")
+        sys.exit(2)
     if not ROOT or not os.path.isdir(ROOT):
         sys.stderr.write(
             "\nNo active project.\n"

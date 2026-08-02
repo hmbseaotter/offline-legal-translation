@@ -23,7 +23,10 @@ KIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 SUBDIRS = ["source", "translated", "work/ocr", "logs", "glossary", "prompts"]
 
 def container_open():
-    return os.path.isdir(P)
+    # Not isdir(): the mountpoint exists whether or not the container is
+    # open, so isdir() would scaffold a new project -- and every file later
+    # put in it -- onto the bare unencrypted directory. See trlib.
+    return trlib.PROJECTS_OVERRIDDEN or trlib.container_mounted()
 
 def active():
     if os.path.exists(MARK):
@@ -90,7 +93,11 @@ def main():
     args = sys.argv[1:]
 
     if not container_open():
-        sys.exit(f"container not mounted: {P}\nrun: case-open")
+        sys.exit(f"container not mounted: {P}\n"
+                 "The directory may exist and still be empty of encryption.\n"
+                 "  check:  case-status\n"
+                 "  open:   case-open\n"
+                 "  never set up:  case-init 40G")
 
     if args and args[0] == "--none":
         if os.path.exists(MARK):

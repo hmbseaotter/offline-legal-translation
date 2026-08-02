@@ -14,9 +14,18 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
 
 # Resolve the active project unless TR_ROOT was given explicitly.
+# The mountpoint directory exists whether or not the container is open, so
+# -d says "the path is there", not "the data is encrypted". Translating a
+# corpus onto the bare mountpoint would write every source and target
+# sentence out in the clear. mountpoint -q is the test that means it.
 if [[ -z "${TR_ROOT:-}" ]]; then
-  [[ -d "$TR_PROJECTS" ]] || { echo "container not mounted: $TR_PROJECTS" >&2
-                               echo "run: case-open" >&2; exit 2; }
+  mountpoint -q "$TR_PROJECTS" 2>/dev/null || {
+    echo "container NOT mounted: $TR_PROJECTS" >&2
+    echo "Writing there now would put case material outside the encryption." >&2
+    echo "  check:  case-status" >&2
+    echo "  open:   case-open" >&2
+    echo "  never set up:  case-init 40G" >&2
+    exit 2; }
   ACTIVE="$(cat "$TR_PROJECTS/.active" 2>/dev/null | tr -d '[:space:]')"
   [[ -n "$ACTIVE" ]] || { echo "no active project. run: tr-project <name>" >&2; exit 2; }
   TR_ROOT="$TR_PROJECTS/$ACTIVE"

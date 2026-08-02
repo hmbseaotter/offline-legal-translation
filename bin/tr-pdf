@@ -11,8 +11,26 @@
 #   tr-pdf in.pdf out.docx       # both stages
 
 set -euo pipefail
-TR_ROOT="${TR_ROOT:-$HOME/translate}"
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
+
+# The OCR text layer is the whole document in plain text -- the single most
+# sensitive artefact this pipeline produces. It belongs inside the container
+# and nowhere else, so resolve the project the same way tr-run does and
+# refuse rather than fall back to a default path.
+if [[ -z "${TR_ROOT:-}" ]]; then
+  mountpoint -q "$TR_PROJECTS" 2>/dev/null || {
+    echo "container NOT mounted: $TR_PROJECTS" >&2
+    echo "The OCR text layer is full plaintext of the document; it must not" >&2
+    echo "be written outside the encrypted container. Refusing." >&2
+    echo "  check:  case-status" >&2
+    echo "  open:   case-open" >&2
+    exit 2; }
+  ACTIVE="$(tr -d '[:space:]' < "$TR_PROJECTS/.active" 2>/dev/null)"
+  [[ -n "$ACTIVE" ]] || { echo "no active project. run: tr-project <name>" >&2; exit 2; }
+  TR_ROOT="$TR_PROJECTS/$ACTIVE"
+fi
+export TR_ROOT
 OCRDIR="$TR_ROOT/work/ocr"
 LANGS="${TR_OCR_LANGS:-slv+eng}"
 mkdir -p "$OCRDIR"
