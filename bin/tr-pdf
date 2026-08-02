@@ -12,6 +12,9 @@
 
 set -euo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# See tr-run: an explicit TR_PROJECTS lifts the mount requirement, matching
+# trlib.PROJECTS_OVERRIDDEN.
+PROJECTS_OVERRIDDEN=${TR_PROJECTS+y}
 TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
 
 # The OCR text layer is the whole document in plain text -- the single most
@@ -19,7 +22,7 @@ TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
 # and nowhere else, so resolve the project the same way tr-run does and
 # refuse rather than fall back to a default path.
 if [[ -z "${TR_ROOT:-}" ]]; then
-  mountpoint -q "$TR_PROJECTS" 2>/dev/null || {
+  [[ -n "${PROJECTS_OVERRIDDEN:-}" ]] || mountpoint -q "$TR_PROJECTS" 2>/dev/null || {
     echo "container NOT mounted: $TR_PROJECTS" >&2
     echo "The OCR text layer is full plaintext of the document; it must not" >&2
     echo "be written outside the encrypted container. Refusing." >&2

@@ -81,6 +81,55 @@ def _resolve_root():
 
 ROOT = _resolve_root()
 
+def _load_project_conf():
+    """Per-project defaults: language pair, suffix, OCR languages.
+
+    tr-run sourced project.conf before dispatching, so batch runs saw these
+    settings and anything invoked directly did not. That is how tr-status
+    came to report an entire corpus as missing whenever a project set
+    TR_SUFFIX -- tr-run renamed the outputs and tr-status did not know it.
+    Loading the file here means every entry point agrees.
+
+    Parsed rather than sourced: project.conf is data, and sourcing it would
+    execute whatever it contains. An explicit environment setting is a
+    deliberate one-off override and wins over the file.
+    """
+    if not ROOT:
+        return
+    conf = os.path.join(ROOT, "project.conf")
+    if not os.path.exists(conf):
+        return
+    for ln in open(conf, encoding="utf-8"):
+        ln = ln.split("#")[0].strip()
+        if "=" not in ln:
+            continue
+        k, _, v = ln.partition("=")
+        k, v = k.strip(), v.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
+            continue
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        os.environ.setdefault(k, v)
+
+_load_project_conf()
+
+# Output extension by source extension. A scanned PDF cannot be regenerated
+# as a PDF and plain text has no formatting to preserve, so both deliver a
+# .docx. bin/tr-run mirrors this table in out_ext_for() -- the two must
+# agree, or tr-run writes one name and tr-status looks for another and every
+# affected file reports as missing forever.
+OUT_EXT = {".pdf": ".docx", ".txt": ".docx"}
+
+def target_name(rel, suffix=None):
+    """The deliverable's name for a source file: suffix applied, extension
+    mapped. Filenames are otherwise preserved -- design invariant 1."""
+    if suffix is None:
+        suffix = os.environ.get("TR_SUFFIX", "")
+    stem, ext = os.path.splitext(rel)
+    if not ext:
+        return rel + suffix
+    return stem + suffix + OUT_EXT.get(ext.lower(), ext)
+
 def require_root():
     """Fail loudly rather than writing into the wrong project.
 

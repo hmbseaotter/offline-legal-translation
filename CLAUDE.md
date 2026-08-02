@@ -102,6 +102,13 @@ Do not change these without discussing with the operator first.
 
 1. **Filenames are preserved** from `source/` to `translated/`. This is a
    client requirement and the basis of `tr-status`. Optional `TR_SUFFIX`.
+   The one exception is the extension: a scanned PDF cannot be regenerated
+   as a PDF and plain text has no formatting to preserve, so both deliver a
+   `.docx`. That mapping lives in `OUT_EXT` / `trlib.target_name()` and is
+   mirrored by `out_ext_for()` in `bin/tr-run`. **Both must agree** — when
+   they did not, `tr-run` wrote `x.docx` while `tr-status` looked for
+   `x.pdf`, so every PDF reported as missing and its output as orphaned,
+   permanently.
 2. **Segment granularity is the sentence**, because that is the reviewer's
    unit of work and it makes the memory reusable across documents.
 3. **Abbreviations must not split sentences.** `ABBREV` in `lib/trlib.py`

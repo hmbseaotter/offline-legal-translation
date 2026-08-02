@@ -11,6 +11,12 @@
 
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Captured before the default is applied: an explicit TR_PROJECTS is a
+# deliberate act (fixtures, a mock-server run, a throwaway root) and lifts
+# the mount requirement, exactly as trlib.PROJECTS_OVERRIDDEN does for the
+# Python tools. Same rule everywhere or the escape hatch works in one half
+# of the kit and not the other.
+PROJECTS_OVERRIDDEN=${TR_PROJECTS+y}
 TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
 
 # Resolve the active project unless TR_ROOT was given explicitly.
@@ -19,7 +25,7 @@ TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
 # corpus onto the bare mountpoint would write every source and target
 # sentence out in the clear. mountpoint -q is the test that means it.
 if [[ -z "${TR_ROOT:-}" ]]; then
-  mountpoint -q "$TR_PROJECTS" 2>/dev/null || {
+  [[ -n "${PROJECTS_OVERRIDDEN:-}" ]] || mountpoint -q "$TR_PROJECTS" 2>/dev/null || {
     echo "container NOT mounted: $TR_PROJECTS" >&2
     echo "Writing there now would put case material outside the encryption." >&2
     echo "  check:  case-status" >&2
@@ -34,7 +40,27 @@ export TR_ROOT TR_PROJECTS
 PROJECT="$(basename "$TR_ROOT")"
 
 # Per-project settings (language pair, suffix, OCR languages).
-[[ -f "$TR_ROOT/project.conf" ]] && { set -a; . "$TR_ROOT/project.conf"; set +a; }
+#
+# Parsed rather than sourced. project.conf is data, and sourcing it both
+# executes whatever it contains and clobbers the environment -- so
+# `TR_SUFFIX=x tr-run` was silently overridden by the file. An explicit
+# environment setting is a deliberate one-off and now wins. lib/trlib.py
+# reads the same file the same way, so the tools invoked directly agree.
+load_conf() {
+  local f="$1" line k v
+  [[ -f "$f" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    [[ "$line" == *=* ]] || continue
+    k="${line%%=*}"; v="${line#*=}"
+    read -r k <<< "$k" || true                 # trims surrounding whitespace
+    read -r v <<< "$v" || true
+    [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
+    [[ -n "${!k+set}" ]] || export "$k=$v"
+  done < "$f"
+}
+load_conf "$TR_ROOT/project.conf"
 
 SRC="$TR_ROOT/source"
 OUT="$TR_ROOT/translated"
@@ -44,14 +70,35 @@ mkdir -p "$OUT" "$TR_ROOT/logs" "$TR_ROOT/work"
 
 DRY=0; [[ "${1:-}" == "-n" ]] && { DRY=1; shift; }
 
+# A scanned PDF cannot be regenerated as a PDF, and plain text has no
+# formatting to preserve, so both deliver a .docx. This mirrors OUT_EXT in
+# lib/trlib.py, which is what tr-status consults: the two must agree, or
+# tr-run writes one name while tr-status looks for another and every
+# affected file reports as missing for good.
+out_ext_for() {
+  case "${1,,}" in
+    pdf|txt) printf 'docx' ;;
+    *)       printf '%s' "$1" ;;
+  esac
+}
+
 target_for() {                       # relpath -> absolute output path
-  local rel="$1"
-  if [[ -n "$SUFFIX" ]]; then
-    local stem="${rel%.*}" ext="${rel##*.}"
-    printf '%s/%s%s.%s' "$OUT" "$stem" "$SUFFIX" "$ext"
+  local rel="$1" stem ext
+  if [[ "${rel##*/}" == *.* ]]; then
+    stem="${rel%.*}"; ext="${rel##*.}"
+    printf '%s/%s%s.%s' "$OUT" "$stem" "$SUFFIX" "$(out_ext_for "$ext")"
   else
-    printf '%s/%s' "$OUT" "$rel"
+    printf '%s/%s%s' "$OUT" "$rel" "$SUFFIX"
   fi
+}
+
+worker_for() {                       # extension -> worker, empty if unsupported
+  case "${1,,}" in
+    docx) printf '%s' "$BIN/tr-docx" ;;
+    xlsx) printf '%s' "$BIN/tr-xlsx" ;;
+    txt)  printf '%s' "$BIN/tr-txt"  ;;
+    pdf)  printf '%s' "$BIN/tr-pdf"  ;;
+  esac
 }
 
 if [[ $# -gt 0 ]]; then
@@ -85,25 +132,25 @@ for rel in "${FILES[@]}"; do
   in="$SRC/$rel"
   out="$(target_for "$rel")"
   ext="${rel##*.}"; ext="${ext,,}"
+  worker="$(worker_for "$ext")"
 
+  # Decided before anything is promised, so -n cannot announce work the
+  # real run will then refuse to do.
+  if [[ -z "$worker" ]]; then
+    echo "skip   $rel  (unsupported extension: $ext)"; ((skip_n++)); continue
+  fi
   if [[ -f "$out" && "$out" -nt "$in" ]]; then
     echo "skip   $rel"; ((skip_n++)); continue
   fi
   if [[ $DRY -eq 1 ]]; then
-    echo "would  $rel  ($ext)"; continue
+    echo "would  $rel  ($ext)  ->  ${out#"$OUT"/}"; continue
   fi
 
   mkdir -p "$(dirname "$out")"
   echo "=== $rel" | tee -a "$LOG"
   t0=$(date +%s)
 
-  case "$ext" in
-    docx) "$BIN/tr-docx" "$in" "$out" 2>&1 | tee -a "$LOG" ;;
-    xlsx) "$BIN/tr-xlsx" "$in" "$out" 2>&1 | tee -a "$LOG" ;;
-    pdf)  "$BIN/tr-pdf"  "$in" "${out%.pdf}.docx" 2>&1 | tee -a "$LOG" ;;
-    *)    echo "  unsupported extension: $ext (skipped)" | tee -a "$LOG"
-          ((skip_n++)); continue ;;
-  esac
+  "$worker" "$in" "$out" 2>&1 | tee -a "$LOG"
 
   if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
     ((done_n++)); echo "  done in $(( $(date +%s) - t0 ))s" | tee -a "$LOG"

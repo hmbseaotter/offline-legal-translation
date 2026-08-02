@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """tr-status - what is translated, what is missing, what is stale.
 
-Compares source/ against translated/ by filename. Filenames are preserved
-exactly, so the comparison is a plain set difference.
+Compares source/ against translated/ by filename. Filenames are preserved,
+so the comparison is close to a plain set difference -- with two exceptions
+that trlib.target_name() accounts for: TR_SUFFIX, and the formats whose
+deliverable is a .docx (a scanned PDF cannot be regenerated as a PDF).
 
 Usage:  tr-status [--missing]      # --missing prints bare paths only
 """
@@ -12,13 +14,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import trlib
 
 SRC, TGT = trlib.path("source"), trlib.path("translated")
-SUFFIX = os.environ.get("TR_SUFFIX", "")     # e.g. "_translated"
 
-def target_name(rel):
-    if not SUFFIX:
-        return rel
-    stem, ext = os.path.splitext(rel)
-    return stem + SUFFIX + ext
+# Shared with bin/tr-run so the name written and the name looked for agree.
+target_name = trlib.target_name
 
 def walk(root):
     out = set()
