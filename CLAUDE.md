@@ -113,7 +113,7 @@ Do not change these without discussing with the operator first.
 
 ```bash
 tr-fixtures fixtures/
-TR_ROOT=/tmp/trtest tr-xlsx fixtures/dokazi-velika.xlsx --survey
+tr-xlsx fixtures/dokazi-velika.xlsx --survey   # no project needed
 python3 -c "import sys;sys.path.insert(0,'lib');import trlib;print(trlib.segment('Po čl. 211 odst. 2 KZ-1. Sodišče je odločilo.'))"
 # expect two segments, not four
 ```

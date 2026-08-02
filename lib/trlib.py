@@ -143,12 +143,30 @@ def segment(text):
 _NONTRANS_CACHE = None
 
 def nontranslatables():
-    """Shared patterns plus any project-specific additions."""
+    """Shared patterns plus any project-specific additions.
+
+    The project overlay is resolved only when a project is actually active.
+    Both arguments of a tuple are evaluated before the loop body runs, so
+    naming path() unconditionally called require_root() and exited even for
+    callers that need no project at all -- tr-xlsx --survey, for one, which
+    only classifies cells and never touches the memory or the model.
+
+    Outside a project the pattern list is the shared set alone, so counts
+    can differ from the same command run inside one. That is said out loud
+    rather than left to be discovered.
+    """
     global _NONTRANS_CACHE
     if _NONTRANS_CACHE is None:
+        files = [shared("glossary", "nontranslatable.txt")]
+        if ROOT and os.path.isdir(ROOT):
+            files.append(path("glossary", "nontranslatable.txt"))
+        else:
+            sys.stderr.write(
+                "note: no active project -- non-translatable patterns are the "
+                "shared set only.\n      Counts may differ from a run inside a "
+                "project.\n")
         pats = []
-        for f in (shared("glossary", "nontranslatable.txt"),
-                  path("glossary", "nontranslatable.txt")):
+        for f in files:
             if not os.path.exists(f):
                 continue
             for ln in open(f, encoding="utf-8"):
