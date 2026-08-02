@@ -101,7 +101,8 @@ done
 # affected file reports as missing for good.
 out_ext_for() {
   case "${1,,}" in
-    pdf|txt) printf 'docx' ;;
+    pdf|txt)             printf 'docx' ;;
+    xlsm|xltx|xltm)      printf 'xlsx' ;;
     *)       printf '%s' "$1" ;;
   esac
 }
@@ -119,7 +120,7 @@ target_for() {                       # relpath -> absolute output path
 worker_for() {                       # extension -> worker, empty if unsupported
   case "${1,,}" in
     docx) printf '%s' "$BIN/tr-docx" ;;
-    xlsx) printf '%s' "$BIN/tr-xlsx" ;;
+    xlsx|xlsm|xltx|xltm) printf '%s' "$BIN/tr-xlsx" ;;
     txt)  printf '%s' "$BIN/tr-txt"  ;;
     pdf)  printf '%s' "$BIN/tr-pdf"  ;;
   esac

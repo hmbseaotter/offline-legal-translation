@@ -53,6 +53,12 @@ SEC_PER_SEGMENT = 48.3
 OCR_SAMPLE_LANGS = os.environ.get("TR_OCR_SAMPLE_LANGS", "slv+hrv+eng")
 
 TEXT_EXT  = {".txt", ".md", ".csv", ".tsv", ".log"}
+# openpyxl reads all four. Routed here rather than left to fall through
+# to no-extractor, where a macro-enabled workbook was reported as an
+# undetermined LANGUAGE -- hiding an unsupported format among the files
+# the manual tells you to inspect for detection failures, counting its
+# cells as zero source words, and under-quoting the job by that much.
+SHEET_EXT = {".xlsx", ".xlsm", ".xltx", ".xltm"}
 # Formats with no text extractor here. Counted and reported, never guessed at.
 OPAQUE_EXT = {".doc", ".odt", ".rtf", ".ods", ".ppt", ".pptx", ".odp",
               ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif", ".bmp",
@@ -241,7 +247,7 @@ def extract(path, ext, allow_ocr, limit=SAMPLE_WORDS, full_ocr=False):
     try:
         if ext == ".docx":
             return from_docx(path, limit)
-        if ext == ".xlsx":
+        if ext in SHEET_EXT:
             return from_xlsx(path, limit)
         if ext in TEXT_EXT:
             return from_text(path, limit)
@@ -338,7 +344,7 @@ def main():
             if a.count and text:
                 row["words"] = str(len(text.split()))
                 row["segments"] = str(len(trlib.segment(text)))
-                if ext in (".xlsx", ".csv", ".tsv"):
+                if ext in SHEET_EXT or ext in (".csv", ".tsv"):
                     # A spreadsheet has cells, not prose. Counting its words
                     # invites a quote based on a number that means nothing;
                     # what governs the work there is unique strings, which
@@ -417,13 +423,24 @@ def main():
         tgt = [r for r in examined if r["lang"] == trlang.TARGET]
         def total(rs, k):
             return sum(int(r[k]) for r in rs if r.get(k, "-").isdigit())
-        words, segs = total(tgt, "words"), total(tgt, "segments")
+        # Segments are a prose measure. A spreadsheet's cells carry no
+        # sentence punctuation, so the whole sheet segments as one unit and
+        # the machine-time estimate built on it is nonsense in both
+        # directions -- it read "1 minute" for a workbook whose unique
+        # strings are hours of inference. Words still count: they are what
+        # the job is quoted in. Machine time for tables comes from
+        # tr-xlsx --survey, where deduplication is what governs it.
+        tabular = [r for r in tgt if r["ext"] in SHEET_EXT
+                   or r["ext"] in (".csv", ".tsv")]
+        prose = [r for r in tgt if r not in tabular]
+        words, segs = total(tgt, "words"), total(prose, "segments")
         needs = [r for r in examined if "needs-ocr" in r.get("method", "")]
         lines.append("")
         lines.append(f"Volume, {trlang.LABEL[trlang.TARGET]} only "
                      f"({len(tgt)} file(s)):")
-        lines.append(f"  words                {words:>9,}")
-        lines.append(f"  segments             {segs:>9,}")
+        lines.append(f"  words                {words:>9,}   source words, the "
+                     f"billing unit")
+        lines.append(f"  segments             {segs:>9,}   prose only")
         if segs:
             secs = segs * SEC_PER_SEGMENT
             if secs < 3600:
@@ -444,11 +461,16 @@ def main():
                          f"layer. Re-run with --with-ocr to include them.")
             for r in needs[:5]:
                 lines.append(f"    {r['method']}")
+        if tabular:
+            lines.append("")
+            lines.append(f"  {len(tabular)} spreadsheet(s): words counted, "
+                         f"segments and time not.")
+            lines.append("  A sheet of cells has no sentences to segment. Run "
+                         "tr-xlsx --survey on each")
+            lines.append("  for the unique-string count, which is what governs "
+                         "the work there.")
         lines.append("")
-        lines.append("  Word counts from OCR are approximate. Spreadsheets are "
-                     "cells rather than")
-        lines.append("  prose - use tr-xlsx --survey for the number that "
-                     "governs work there.")
+        lines.append("  Word counts from OCR are approximate.")
     lines.append("")
     lines.append("By file format:")
     for ext, n in fmts.most_common():

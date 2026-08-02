@@ -127,7 +127,16 @@ _load_project_conf()
 # .docx. bin/tr-run mirrors this table in out_ext_for() -- the two must
 # agree, or tr-run writes one name and tr-status looks for another and every
 # affected file reports as missing forever.
-OUT_EXT = {".pdf": ".docx", ".txt": ".docx"}
+#
+# Macro-enabled and template workbooks deliver as a plain .xlsx. openpyxl
+# reads them all, but writing one back drops the macro project unless it is
+# carried through deliberately -- and a file that still calls itself .xlsm
+# while no longer containing macros is worse than one that does not claim to.
+# The deliverable is a translation, not a working copy of the client's
+# tooling, and unexamined macros out of a client drop are not something to
+# pass on to a court.
+OUT_EXT = {".pdf": ".docx", ".txt": ".docx",
+           ".xlsm": ".xlsx", ".xltx": ".xlsx", ".xltm": ".xlsx"}
 
 def manifest_paths(lang=None):
     """Source-relative paths from the tr-inventory manifest.

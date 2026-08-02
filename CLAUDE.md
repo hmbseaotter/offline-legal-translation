@@ -104,7 +104,7 @@ flattens the tree.
 | `tr-inventory --count [--with-ocr]` | Words and segments per file, to size the job before starting. Scanned PDFs need `--with-ocr` |
 | `tr-status` | Diff `source/` against `translated/` |
 | `tr-run [-n] [--all] [file]` | Batch translate; resumable. Without `--all`, only what the inventory matched |
-| `tr-docx` / `tr-xlsx` / `tr-pdf` / `tr-txt` | Per-format workers |
+| `tr-docx` / `tr-xlsx` / `tr-pdf` / `tr-txt` | Per-format workers. `tr-xlsx` also takes `.xlsm` / `.xltx` / `.xltm`, all delivered as `.xlsx` — the translation carries no macros and should not claim to |
 | `tr-lint` | Deterministic checks over the memory |
 
 ## Design invariants
