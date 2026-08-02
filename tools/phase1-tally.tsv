@@ -24,6 +24,7 @@ page	set	minutes	notes
 # needs rewriting, which no configuration solves.
 #
 class	ticks	what it means
+ocr		The draft was wrong because the OCR was wrong, not the translation. Count these separately or the ratio blames the model for Tesseract. On an all-scanned corpus this is the row to watch
 terminology		Right meaning, wrong term. Fixed by one glossary entry, forever
 register		Accurate but reads wrong for a court document
 numbers		A figure, date or case number altered or dropped. tr-lint should have caught these - if you are finding them by eye, say so
@@ -38,3 +39,22 @@ other		Anything that fits none of the above - describe it
 # - Any draft you abandoned and retranslated from scratch, and why.
 # - Anything the draft got right that you expected it to get wrong.
 # - Whether the bilingual layout helped or got in the way.
+#
+#
+# IF EVERY SOURCE IS A SCAN
+#
+# Then the comparison is not really "machine translation against none". It is
+# "OCR plus machine translation against reading the page yourself", and both
+# halves of that can fail. The ocr row above is what separates them.
+#
+# A poor ratio driven by the ocr row is not a verdict on translation. It says
+# the text going in is damaged, and the fixes live upstream: better scanning,
+# different OCR settings, or a second OCR engine cross-checking the first.
+# The vision model already transcribes a clean page at 97.3% with every case
+# number, amount, date and diacritic exact, so that cross-check is available
+# and untested on real scans.
+#
+# Also worth timing, separately from translation: how long it takes to read
+# an OCR text layer against its page and correct it. On an all-scanned corpus
+# that cost is paid on every page whether or not any machine translation
+# happens, so it belongs in the quote either way.

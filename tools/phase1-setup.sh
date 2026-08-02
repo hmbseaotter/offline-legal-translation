@@ -68,11 +68,38 @@ echo "  If anything in phase1/ came back as another language, take it out of"
 echo "  the comparison. A held-back file is not billable work and would not"
 echo "  have been translated anyway."
 
-step "3. volume - the source-word baseline"
-tr-inventory --count
+step "3. volume - the source-word baseline (OCR included)"
+# --with-ocr, not plain --count. On an all-scanned corpus a counting pass
+# that refuses to OCR reports zero source words for every file, which is the
+# opposite of a baseline. The OCR is cached where tr-pdf reads it, so the
+# cost is paid here once and the drafting step finds it done.
+tr-inventory --count --with-ocr
 echo
 echo "  Source words is the billing unit. Note the figure for the six pages;"
 echo "  the ratio is per page, but the quote is per word."
+
+step "3a. READ THE OCR BEFORE ANYTHING IS TRANSLATED"
+cat <<'EOF'
+  Every page here is a scan, so OCR is the first thing that can go wrong and
+  the only one that goes wrong silently. A model fed corrupted OCR does not
+  flag it: it produces a fluent, confident translation of the corruption, and
+  a misread digit in a date or an amount arrives looking entirely correct.
+
+  Open each text layer against its page images and check the things OCR
+  actually gets wrong -- names, dates, case numbers, amounts, and the
+  characters c-caron, s-caron and z-caron. Mangled diacritics still form
+  valid Slovene words, so no spellcheck will catch them.
+
+      work/ocr/<name>.txt        the text the translation will be built on
+      work/ocr/<name>.ocr.pdf    the same pages with that text behind them
+
+  If the OCR is poor, stop. Translating it measures Tesseract, not the
+  pipeline, and burns the translator's time on damage that is cheaper to fix
+  upstream.
+EOF
+printf '\n  Continue to drafting? [y/N] '
+read -r ans
+[[ "${ans,,}" == "y" ]] || { echo "  stopped before drafting - nothing wasted"; exit 0; }
 
 step "4. draft the mt set (scratch/ is not touched)"
 mapfile -t MTFILES < <(find "$SRC/phase1/mt" -type f | sort)
