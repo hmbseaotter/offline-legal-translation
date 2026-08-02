@@ -2,3 +2,16 @@ fixtures/
 __pycache__/
 *.pyc
 .claude/settings.local.json
+
+# Client material never enters this repo. The kit is scripts, .tsv, .txt and
+# .md only, so any document here came from a matter -- almost certainly copied
+# in to debug something. .githooks/pre-commit blocks these even when forced.
+*.docx
+*.doc
+*.xlsx
+*.xls
+*.pptx
+*.pdf
+*.odt
+*.ods
+*.rtf

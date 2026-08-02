@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# pre-push - delegate to the workspace-wide push-destination guard.
+#
+# This repo sets core.hooksPath to .githooks so its pre-commit hook runs at
+# all (a global core.hooksPath shadows .git/hooks). That local setting also
+# shadows the global hooks directory, which would silently disable the
+# workspace pre-push owner check for this repo -- exactly the repo where
+# pushing to the wrong destination matters most. This file restores it.
+#
+# exec preserves stdin, which pre-push needs: git feeds it the refs being
+# pushed on standard input.
+
+set -uo pipefail
+
+globaldir=$(git config --global --get core.hooksPath || true)
+if [[ -n "${globaldir:-}" && -x "$globaldir/pre-push" ]]; then
+  exec "$globaldir/pre-push" "$@"
+fi
+
+exit 0
