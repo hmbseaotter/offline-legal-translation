@@ -77,6 +77,33 @@ def tesseract(img):
     return r.stdout.decode("utf-8", "replace")
 
 
+def tesseract_conf(img):
+    """Per-word confidence, and what it does and does not tell you.
+
+    Forms in an evidence bundle are filled in by hand, and handwriting does
+    not fail loudly: Tesseract emits plausible-looking words rather than
+    nothing, and the model then translates them fluently. Confidence catches
+    that case well -- scrawl scores in the tens where print scores in the
+    high eighties.
+
+    What it does NOT catch is a misread digit in clean print. A test page
+    reading "12.450,00 EUR" came back as 1248000 at 86% confidence: a wrong
+    amount, asserted as firmly as a right one. So a confidence floor finds
+    handwriting, and only a second engine reading the same page finds that.
+    """
+    r = subprocess.run(["tesseract", img, "stdout", "-l", OCR_LANGS, "tsv"],
+                       capture_output=True, timeout=600)
+    words = []
+    for ln in r.stdout.decode("utf-8", "replace").splitlines()[1:]:
+        c = ln.split("\t")
+        if len(c) >= 12 and c[11].strip() and c[10] not in ("-1", "conf"):
+            try:
+                words.append((float(c[10]), c[11]))
+            except ValueError:
+                pass
+    return words
+
+
 def vision(img):
     with open(img, "rb") as fh:
         b64 = base64.b64encode(fh.read()).decode()
@@ -131,6 +158,25 @@ def main():
             print(f"  page {n}")
             print(f"    tesseract   {tw:>5} words  {len(nums(t_txt)):>4} numbers"
                   f"  {td:>4} diacritics   {t_secs:>5.0f}s")
+
+            conf = tesseract_conf(p)
+            if conf:
+                low = [(c, w) for c, w in conf if c < 40]
+                doubt = [(c, w) for c, w in conf if 40 <= c < 60]
+                lownum = [(c, w) for c, w in low if any(ch.isdigit() for ch in w)]
+                pct = 100.0 * len(low) / len(conf)
+                print(f"    confidence  {len(low)} of {len(conf)} words below 40"
+                      f" ({pct:.0f}%), {len(doubt)} between 40 and 60")
+                if pct >= 20:
+                    print(f"                ^ a fifth of the page is unreadable to"
+                          f" Tesseract. Handwriting looks")
+                    print(f"                  exactly like this. Those lines need"
+                          f" a person, not a better model.")
+                if lownum:
+                    print(f"                {len(lownum)} unreadable token(s)"
+                          f" contain digits - a hand-filled date or amount")
+                    print(f"                  is the worst thing to guess at."
+                          f" Mark them [ILLEGIBLE] rather than translate them.")
 
             if a.no_vision:
                 print()
