@@ -36,11 +36,14 @@ def main():
     todo = [u for u in units if trlib.is_translatable(u)]
     print(f"  {len(units)} segments, {len(todo)} translatable", file=sys.stderr)
 
+    # Per document, as in tr-docx: first mention in this file, not the run.
+    first = trlib.FirstMention(f"{a.src}-{a.tgt}")
+
     n = 0
     for u in units:
         if trlib.is_translatable(u):
             n += 1
-            out = trlib.ollama_translate(u, a.src, a.tgt, gloss)
+            out = first.apply(trlib.ollama_translate(u, a.src, a.tgt, gloss))
             trlib.progress(n, len(todo), u[:48])
         else:
             out = u

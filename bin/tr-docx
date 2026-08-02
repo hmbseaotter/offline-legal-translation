@@ -88,6 +88,13 @@ def main():
     print(f"  {os.path.basename(a.inp)}: {len(pars)} paragraphs, "
           f"{len(todo)} translatable", file=sys.stderr)
 
+    # One per document: the translator's rule is first mention in THIS file,
+    # not first in the run. Applied after translation rather than asked of the
+    # model, because the memory keys on source text -- a bracketed sentence
+    # cached from this document would come back in the next one, where the
+    # same sentence is not the first mention.
+    first = trlib.FirstMention(f"{a.src}-{a.tgt}")
+
     for i, par in enumerate(todo, 1):
         src = par.text.strip()
         segs = trlib.segment(src)
@@ -98,6 +105,7 @@ def main():
             # This is what makes the cache reusable across documents.
             out = " ".join(
                 trlib.ollama_translate(s, a.src, a.tgt, gloss) for s in segs)
+        out = first.apply(out)
         set_paragraph_text(par, out)
         trlib.progress(i, len(todo), src[:48])
 

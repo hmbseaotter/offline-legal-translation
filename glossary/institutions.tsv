@@ -1,0 +1,37 @@
+# Institution names: source form <TAB> target form <TAB> language pair
+#
+# On the FIRST mention in each document the target form is rendered as
+#     Okrožno sodišče v Ljubljani (District Court in Ljubljana)
+# and every later mention in that same document is the target form alone.
+# The translator's rule: easier to delete something once than to hunt for a
+# place where it is missing.
+#
+# Scoped per document, not per run. The same sentence may be the first
+# mention in one file and the fortieth in another, which is why this is a
+# deterministic pass over the translated text rather than an instruction to
+# the model -- the memory keys on source text, so a bracketed translation
+# cached from one document would surface wrongly in the next.
+#
+# Matching is on the target form the model actually produced. If the model
+# renders an institution differently from the entry here, no bracket is
+# added: a missing bracket is a visible omission the reviewer can fix, a
+# wrong one is a defect that reads as correct.
+#
+# Add rows as a matter requires. Courts are per-city, so only the ones in
+# use are listed; national bodies are fixed and seeded here.
+#
+# source	target	pair
+Vrhovno sodišče Republike Slovenije	Supreme Court of the Republic of Slovenia	sl-en
+Ustavno sodišče Republike Slovenije	Constitutional Court of the Republic of Slovenia	sl-en
+Vrhovno državno tožilstvo Republike Slovenije	Supreme State Prosecutor's Office of the Republic of Slovenia	sl-en
+Ministrstvo za notranje zadeve	Ministry of the Interior	sl-en
+Ministrstvo za pravosodje	Ministry of Justice	sl-en
+Generalna policijska uprava	General Police Directorate	sl-en
+Okrožno sodišče v Ljubljani	District Court in Ljubljana	sl-en
+Okrajno sodišče v Ljubljani	Local Court in Ljubljana	sl-en
+Višje sodišče v Ljubljani	Higher Court in Ljubljana	sl-en
+Okrožno državno tožilstvo v Ljubljani	District State Prosecutor's Office in Ljubljana	sl-en
+Policijska uprava Ljubljana	Ljubljana Police Directorate	sl-en
+Okrožno sodišče v Mariboru	District Court in Maribor	sl-en
+Okrožno sodišče v Kranju	District Court in Kranj	sl-en
+Okrožno sodišče v Celju	District Court in Celje	sl-en

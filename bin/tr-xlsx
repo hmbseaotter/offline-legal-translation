@@ -75,6 +75,13 @@ def main():
               file=sys.stderr)
         return
 
+    # No first-mention bracketing here, deliberately. A spreadsheet is
+    # translated through a unique-string map: one translation is written back
+    # to every cell holding that string. Bracketing the "first" one would
+    # bracket all of them, because they are the same string. Institution
+    # names in a table are also a column value rather than running prose,
+    # where the source form beside every entry would be noise. If a matter
+    # needs it in a table, it is a manual edit on the deliverable.
     gloss = trlib.load_glossary()
     mapping = {}
     for i, s in enumerate(uniq, 1):

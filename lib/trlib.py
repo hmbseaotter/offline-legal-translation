@@ -391,6 +391,93 @@ def flagged(text):
     return bool(_CITE_RE.search(text or ""))
 
 
+# ------------------------------------------------ institutions, first mention
+
+# The translator wants an institution's source name kept beside the
+# translation on its first mention in a document, and the translation alone
+# thereafter: easier to delete something once than to hunt for the place it
+# is missing.
+#
+# Per DOCUMENT, not per run, and the reason is the reader rather than the
+# code. Whoever picks up the deliverable has no particular order in mind and
+# may open any file first, so each has to stand on its own. Bracketing once
+# across a whole matter would leave most documents referring to a definition
+# in some other file the reader may never open -- and maintaining those
+# cross-references would be worse than the problem it solved.
+#
+# Deliberately NOT done by the model. The memory keys on source text, so a
+# sentence carrying the first mention would be cached with its brackets and
+# reused in the next document, where the same sentence is the fortieth
+# mention. Bracketing is document-scoped; the cache is corpus-scoped. A
+# deterministic pass over the translated text keeps them from fighting, and
+# has the side benefit of being reproducible.
+
+_INST_CACHE = None
+
+
+def institutions(direction="sl-en"):
+    """(source form, target form) pairs for a direction: kit, then overlays."""
+    global _INST_CACHE
+    if _INST_CACHE is None:
+        _INST_CACHE = {}
+        kit = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "glossary", "institutions.tsv")
+        files = [kit, shared("glossary", "institutions.tsv")]
+        if ROOT and os.path.isdir(ROOT):
+            files.append(path("glossary", "institutions.tsv"))
+        for f in files:
+            if not os.path.exists(f):
+                continue
+            for ln in open(f, encoding="utf-8"):
+                ln = ln.split("#")[0].rstrip("\n")
+                cols = [c.strip() for c in ln.split("\t")]
+                if len(cols) >= 3 and cols[0] and cols[1]:
+                    _INST_CACHE.setdefault(cols[2], []).append((cols[0], cols[1]))
+    # Longest target first: "District Court in Ljubljana" must win over any
+    # shorter entry that is a prefix of it.
+    return sorted(_INST_CACHE.get(direction, []),
+                  key=lambda p: len(p[1]), reverse=True)
+
+
+class FirstMention:
+    """Brackets the first mention of each institution, per document.
+
+    One instance per document. Feed it each translated segment in order and
+    it returns the segment to write, having added the source form in
+    parentheses the first time that institution appears and left every later
+    occurrence alone.
+
+    Matches on what the model actually produced. If it renders an institution
+    differently from the table, nothing is bracketed -- a missing bracket is
+    an omission a reviewer can see and fix, a wrong one reads as correct and
+    would not be looked at again.
+    """
+
+    def __init__(self, direction="sl-en"):
+        self.pairs = institutions(direction)
+        self.seen = set()
+
+    def apply(self, text):
+        if not text or not self.pairs:
+            return text
+        for src_form, tgt_form in self.pairs:
+            if tgt_form in self.seen:
+                continue
+            i = text.find(tgt_form)
+            if i < 0:
+                continue
+            # Already bracketed by hand, or the source form is right there?
+            # Leave it; do not double up.
+            window = text[max(0, i - len(src_form) - 4):i]
+            if src_form in window or text[i:i + len(tgt_form) + 2].endswith("("):
+                self.seen.add(tgt_form)
+                continue
+            text = (text[:i] + f"{src_form} ({tgt_form})"
+                    + text[i + len(tgt_form):])
+            self.seen.add(tgt_form)
+        return text
+
+
 # ------------------------------------------------------- locale conversion
 
 # Dates, amounts and times are converted to the target locale rather than
