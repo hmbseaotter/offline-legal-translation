@@ -133,8 +133,20 @@ Do not change these without discussing with the operator first.
 4. **Abbreviations must not split sentences.** `ABBREV` in `lib/trlib.py`
    holds the Slovene legal list (`št.` `čl.` `odst.` `d.o.o.` …). Adding
    entries is expected; removing them breaks review ergonomics.
-5. **Non-translatables pass through verbatim** — case numbers, dates,
-   amounts, statute short forms. Patterns in `glossary/nontranslatable.txt`.
+5. **Non-translatables pass through verbatim** — case numbers, file numbers,
+   statute short forms, identifiers. Patterns in `glossary/nontranslatable.txt`.
+   **Dates, amounts and times are not in this class.** They are *converted*
+   to the target locale, on the translator's instruction: `5. 3. 2024` →
+   `5 March 2024`, `12.450,00` → `12,450.00`, 24-hour `14.30` → `2:30 p.m.`
+   The value never changes; only its spelling does. This is why `tr-lint`
+   canonicalises months and clock times before comparing numbers — without
+   that, every date in the corpus raised a NUM finding and buried the real
+   ones. German is not English here: it keeps the 24-hour clock and writes
+   `5. März 2024`, so verify that pair before extending to it.
+   Two files hold the prompt — `prompts/translate.txt` (the seed `case-init`
+   copies into `_shared/`) and `_DEFAULT_PROMPT` in `lib/trlib.py` (the
+   fallback). **They must say the same thing**, and changing either means
+   bumping `TR_PROMPT_VERSION` under invariant 6.
 6. **The memory is the resume state.** `work/tm.sqlite` keys on
    `sha256(direction, model, prompt_version, source)`. Changing the prompt
    must bump `TR_PROMPT_VERSION` or stale translations get reused.

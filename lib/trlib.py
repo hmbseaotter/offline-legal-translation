@@ -197,7 +197,11 @@ def project_name():
 MODEL = os.environ.get("TR_MODEL", "gams3:q8")
 OLLAMA = os.environ.get("TR_OLLAMA", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
-PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v1")
+# v2: the prompt stopped ordering dates and amounts reproduced verbatim and
+# started requiring locale conversion. Invariant 6 -- the memory keys on this,
+# so anything cached under v1 was produced under the opposite instruction and
+# must not be reused.
+PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v2")
 
 def path(*p):
     return os.path.join(require_root(), *p)
@@ -295,6 +299,80 @@ def nontranslatables():
                     pats.append(re.compile(ln))
         _NONTRANS_CACHE = pats
     return _NONTRANS_CACHE
+
+# ------------------------------------------------------- locale conversion
+
+# Dates, amounts and times are converted to the target locale rather than
+# reproduced verbatim -- the translator's rule. Inside a sentence the model
+# does it, instructed by the prompt. A segment that is ONLY a date or an
+# amount never reaches the model: is_translatable() is false for it, so it
+# was returned untouched. A spreadsheet Datum column therefore stayed in
+# Slovene form while the same date in prose became English, and the
+# deliverable contradicted itself column by column.
+#
+# Doing it here instead of sending these to the model is also ~48 s per
+# unique value cheaper, and deterministic: the same input always yields the
+# same output, which a language model does not guarantee.
+
+_EN_MONTHS = ("January", "February", "March", "April", "May", "June", "July",
+              "August", "September", "October", "November", "December")
+
+_DATE_DMY = re.compile(r"^\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})\.?\s*$")
+_TIME_HM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
+_AMOUNT = re.compile(r"^\s*([\d.,]+)\s*(EUR|USD|CHF|GBP|SIT|€|\$|£)\s*$")
+_SL_DECIMAL = re.compile(r"^(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d+)?$")
+
+
+def _sl_number_to_en(s):
+    """12.450,00 -> 12,450.00. Slovene groups with '.' and decimates with ','."""
+    if not _SL_DECIMAL.fullmatch(s):
+        return None
+    return s.replace(".", "\x00").replace(",", ".").replace("\x00", ",")
+
+
+def localize(text, src_lang, tgt_lang):
+    """Convert a whole-segment date, time or amount to the target locale.
+
+    Returns the text unchanged when nothing applies -- including for every
+    target other than English. German keeps the 24-hour clock and writes
+    "5. März 2024", so it needs its own rules and the manual says to verify
+    that pair before extending to it. Silently applying English conventions
+    to German output would be worse than doing nothing.
+
+    Deliberately conservative: only "14:30" is read as a time, never "14.30",
+    which in an isolated cell is far more likely to be a decimal number. A
+    wrong guess here would corrupt a value rather than merely misformat it.
+    """
+    if src_lang != "sl" or tgt_lang != "en":
+        return text
+    s = (text or "").strip()
+    if not s:
+        return text
+
+    m = _DATE_DMY.match(s)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"{d} {_EN_MONTHS[mo - 1]} {y}"
+        return text
+
+    m = _TIME_HM.match(s)
+    if m:
+        h, mi = int(m.group(1)), m.group(2)
+        if 0 <= h <= 23 and 0 <= int(mi) <= 59:
+            suffix = "a.m." if h < 12 else "p.m."
+            h12 = h % 12 or 12
+            return f"{h12}:{mi} {suffix}"
+        return text
+
+    m = _AMOUNT.match(s)
+    if m:
+        num = _sl_number_to_en(m.group(1))
+        return f"{num} {m.group(2)}" if num else text
+
+    num = _sl_number_to_en(s)
+    return num if num else text
+
 
 def is_translatable(s):
     """False for strings that must be reproduced verbatim."""
@@ -398,8 +476,13 @@ Rules:
 - Preserve meaning exactly. Do not summarize, expand, or improve the source.
 - Reproduce verbatim, untranslated: case numbers, file numbers, statutory
   citations, article and paragraph references, institution names, personal
-  names, addresses, dates, and monetary amounts.
-- Preserve all numbers exactly as written.
+  names, and addresses.
+- Convert to {TGT} convention without changing the value: dates
+  (5. 3. 2024 -> 5 March 2024), decimal and thousands separators
+  (12.450,00 -> 12,450.00), and 24-hour times (14.30 -> 2:30 p.m.).
+  Use day-month-year for every date; never switch format mid-document.
+- Never alter a numeric value. Formatting may follow {TGT} convention;
+  the quantity, date, or time denoted must be identical.
 - If a passage is illegible or garbled, output [ILLEGIBLE] in its place
   rather than guessing what it might have said.
 - Match the formal register of legal documents.
@@ -408,7 +491,9 @@ Rules:
 
 def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     if not is_translatable(text):
-        return text
+        # Not model work, but not necessarily unchanged either: a segment that
+        # is only a date or an amount still gets its locale converted.
+        return localize(text, src_lang, tgt_lang)
     cached = tm_get(text, f"{src_lang}-{tgt_lang}")
     if cached is not None:
         return cached

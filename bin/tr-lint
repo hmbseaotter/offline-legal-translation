@@ -21,12 +21,64 @@ import os, re, sys, sqlite3, argparse, collections
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import trlib
 
-NUM_RE = re.compile(r"\d[\d.,/\u2013-]*\d|\d")
+NUM_RE = re.compile(r"\d[\d.,:/\u2013-]*\d|\d")
+
+# Locale conversion is CORRECT output, not an error. Slovene writes dates
+# 5. 3. 2024, decimals with a comma, and time on a 24-hour clock; English
+# writes 5 March 2024, decimals with a point, and 2:30 p.m. The translator
+# requires those conversions, so the numerals legitimately move around --
+# a month becomes a word, an hour shifts by twelve.
+#
+# Comparing raw digits therefore raised a NUM finding for every date in the
+# corpus. Legal documents are made of dates: that noise would bury the real
+# findings and make the report useless as the reviewer's worklist it is meant
+# to be. Both sides are canonicalised first so the check compares values
+# rather than spellings.
+MONTHS = {
+    1: ("january", "januar", "januarja", "jan"),
+    2: ("february", "februar", "februarja", "feb"),
+    3: ("march", "marec", "marca", "mar", "m\u00e4rz"),
+    4: ("april", "aprila", "apr"),
+    5: ("may", "maj", "maja", "mai"),
+    6: ("june", "junij", "junija", "jun", "juni"),
+    7: ("july", "julij", "julija", "jul", "juli"),
+    8: ("august", "avgust", "avgusta", "aug"),
+    9: ("september", "septembra", "sep", "sept"),
+    10: ("october", "oktober", "oktobra", "oct", "okt"),
+    11: ("november", "novembra", "nov"),
+    12: ("december", "decembra", "dec", "dezember"),
+}
+_MONTH_RE = re.compile(
+    r"\b(" + "|".join(sorted((n for names in MONTHS.values() for n in names),
+                             key=len, reverse=True)) + r")\b", re.I)
+_MONTH_NUM = {n: str(num) for num, names in MONTHS.items() for n in names}
+
+# 2:30 p.m. / 2:30PM / 12:05 a.m.
+_AMPM_RE = re.compile(r"\b(\d{1,2}):(\d{2})\s*([ap])\.?\s*m\.?", re.I)
+
+
+def _to24(m):
+    h, mm, ap = int(m.group(1)), m.group(2), m.group(3).lower()
+    if ap == "a":
+        h = 0 if h == 12 else h
+    else:
+        h = 12 if h == 12 else h + 12
+    return f"{h:02d}:{mm}"
+
+
+def canon_locale(s):
+    """Fold locale spellings onto one form before numbers are compared."""
+    s = s or ""
+    s = _AMPM_RE.sub(_to24, s)                       # 2:30 p.m. -> 14:30
+    s = _MONTH_RE.sub(lambda m: _MONTH_NUM[m.group(1).lower()], s)   # March -> 3
+    return s
+
 
 def norm_nums(s):
-    """Numbers with separators normalized, so 1.234,56 == 1,234.56."""
+    """Numbers with separators normalized, so 1.234,56 == 1,234.56, and with
+    locale-converted dates and times folded onto a single representation."""
     out = []
-    for m in NUM_RE.findall(s or ""):
+    for m in NUM_RE.findall(canon_locale(s)):
         d = re.sub(r"[^\d]", "", m)
         if d:
             out.append(d.lstrip("0") or "0")
@@ -87,7 +139,14 @@ def main():
                 if not frag or any(frag in s for s in seen):
                     continue
                 seen.add(frag)
-                if frag not in tgt:
+                # Verbatim is one acceptable outcome; the locale-converted
+                # form is the other. Dates and amounts are matched by these
+                # patterns but are required to change -- checking only for
+                # the source spelling reported every converted date as
+                # dropped, which is the same false alarm the NUM check had.
+                sl, tl = (direction.split("-") + ["", ""])[:2]
+                want = trlib.localize(frag, sl, tl)
+                if frag not in tgt and (want == frag or want not in tgt):
                     findings.append(("NONTR", f"'{frag}' altered or dropped", src, tgt))
 
     for (src, direction), tgts in by_src.items():

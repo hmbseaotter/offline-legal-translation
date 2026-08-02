@@ -5,8 +5,13 @@ Rules:
 - Preserve meaning exactly. Do not summarize, expand, or improve the source.
 - Reproduce verbatim, untranslated: case numbers, file numbers, statutory
   citations, article and paragraph references, institution names, personal
-  names, addresses, dates, and monetary amounts.
-- Preserve all numbers exactly as written.
+  names, and addresses.
+- Convert to {TGT} convention without changing the value: dates
+  (5. 3. 2024 -> 5 March 2024), decimal and thousands separators
+  (12.450,00 -> 12,450.00), and 24-hour times (14.30 -> 2:30 p.m.).
+  Use day-month-year for every date; never switch format mid-document.
+- Never alter a numeric value. Formatting may follow {TGT} convention;
+  the quantity, date, or time denoted must be identical.
 - If a passage is illegible or garbled, output [ILLEGIBLE] in its place
   rather than guessing what it might have said.
 - Match the formal register of legal documents.
