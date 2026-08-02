@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# llm-hw-survey.sh — collect the hardware facts that determine which local
+# tr-hwsurvey — collect the hardware facts that determine which local
 # LLMs a machine can realistically run. Read-only; installs nothing.
-# Usage:  bash llm-hw-survey.sh            (prints to screen)
-#         bash llm-hw-survey.sh > out.txt  (saves to file)
+# Usage:  tr-hwsurvey            (prints to screen)
+#         tr-hwsurvey > out.txt  (saves to file)
 
 set -uo pipefail
 line() { printf '\n===== %s =====\n' "$1"; }
