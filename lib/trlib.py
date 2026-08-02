@@ -170,8 +170,17 @@ def require_root():
     Refuses outright when the target sits under a container that is not
     mounted: that is not "no project yet", it is "you are about to write
     case material to an unencrypted directory".
+
+    The mount is checked before the project, and that order matters. The
+    .active marker lives INSIDE the container, so while it is closed the
+    marker cannot be read, ROOT is None, and a mount test written as
+    `ROOT and ...` never fires. Every Python tool then reported "no active
+    project" and advised running tr-project -- which cannot work, because
+    the thing that records the active project is inside the container the
+    user has not opened. tr-run, being bash and checking the mountpoint
+    first, gave the right diagnosis all along; the two now agree.
     """
-    if (ROOT and _under(ROOT, PROJECTS)
+    if ((ROOT is None or _under(ROOT, PROJECTS))
             and not PROJECTS_OVERRIDDEN and not container_mounted()):
         sys.stderr.write(
             "\nThe case container is NOT mounted.\n"
