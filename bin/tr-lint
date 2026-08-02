@@ -24,10 +24,10 @@ import trlib
 NUM_RE = re.compile(r"\d[\d.,:/\u2013-]*\d|\d")
 
 # Locale conversion is CORRECT output, not an error. Slovene writes dates
-# 5. 3. 2024, decimals with a comma, and time on a 24-hour clock; English
-# writes 5 March 2024, decimals with a point, and 2:30 p.m. The translator
-# requires those conversions, so the numerals legitimately move around --
-# a month becomes a word, an hour shifts by twelve.
+# 5. 3. 2024 or 5. marec 2024, decimals with a comma, and time on a 24-hour
+# clock; English writes March 5, 2024, decimals with a point, and 2:30 p.m.
+# The translator requires those conversions, so the numerals legitimately
+# move around -- a month becomes a word, an hour shifts by twelve.
 #
 # Comparing raw digits therefore raised a NUM finding for every date in the
 # corpus. Legal documents are made of dates: that noise would bury the real

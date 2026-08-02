@@ -144,8 +144,12 @@ Do not change these without discussing with the operator first.
 5. **Non-translatables pass through verbatim** — case numbers, file numbers,
    statute short forms, identifiers. Patterns in `glossary/nontranslatable.txt`.
    **Dates, amounts and times are not in this class.** They are *converted*
-   to the target locale, on the translator's instruction: `5. 3. 2024` →
-   `5 March 2024`, `12.450,00` → `12,450.00`, 24-hour `14.30` → `2:30 p.m.`
+   to the target locale, on the translator's instruction. Into English:
+   `March 5, 2024`, `12,450.00`, `2:30 p.m.` Into Slovene: `5. marec 2024` —
+   the day takes a period because it is an ordinal, the month is lowercase,
+   and the parts are spaced — plus `12.450,00` and a 24-hour clock.
+   Neither `5 March 2024` nor `5. Marec 2024` is correct in either language;
+   both were in this file before the translator corrected them.
    The value never changes; only its spelling does. This is why `tr-lint`
    canonicalises months and clock times before comparing numbers — without
    that, every date in the corpus raised a NUM finding and buried the real

@@ -199,6 +199,11 @@ OLLAMA = os.environ.get("TR_OLLAMA", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
 # v2: the prompt stopped ordering dates and amounts reproduced verbatim and
 # started requiring locale conversion.
+# v4: the date forms were wrong in both directions. English takes
+# "March 5, 2024", not "5 March 2024" -- that form was this kit's invention.
+# Slovene takes "5. marec 2024": the day carries a period because it is an
+# ordinal (bare "5" is the cardinal), the month name is lowercase, and the
+# three parts are spaced. "5. Marec 2024" is wrong twice.
 # v3: institution names are translated, not reproduced verbatim. The verbatim
 # rule had listed them alongside case numbers, and two models read it two
 # ways -- qwen3.6 left "Okrožnim sodiščem v Ljubljani" in Slovene, which the
@@ -206,7 +211,7 @@ NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
 # not an identifier, so the rule was wrong rather than ambiguous.
 # Invariant 7 -- the memory keys on this, so anything cached under an earlier
 # version was produced under a different instruction and must not be reused.
-PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v3")
+PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v4")
 
 def path(*p):
     return os.path.join(require_root(), *p)
@@ -385,10 +390,24 @@ def flagged(text):
 _EN_MONTHS = ("January", "February", "March", "April", "May", "June", "July",
               "August", "September", "October", "November", "December")
 
+# Lowercase, and that is not a stylistic choice: Slovene does not capitalise
+# month names. "5. Marec 2024" is wrong twice over.
+_SL_MONTHS = ("januar", "februar", "marec", "april", "maj", "junij", "julij",
+              "avgust", "september", "oktober", "november", "december")
+
 _DATE_DMY = re.compile(r"^\s*(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})\.?\s*$")
+# English month-name dates, both orders. Numeric forms like 03/05/2024 are
+# deliberately not matched: which number is the month is unknowable, and
+# guessing would silently move a date by months.
+_DATE_EN = re.compile(
+    r"^\s*(?:(" + "|".join(_EN_MONTHS) + r")\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})"
+    r"|(\d{1,2})(?:st|nd|rd|th)?\s+(" + "|".join(_EN_MONTHS) + r"),?\s+(\d{4}))\s*\.?\s*$",
+    re.IGNORECASE)
 _TIME_HM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
+_TIME_AMPM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*([ap])\.?\s*m\.?\s*$", re.I)
 _AMOUNT = re.compile(r"^\s*([\d.,]+)\s*(EUR|USD|CHF|GBP|SIT|€|\$|£)\s*$")
 _SL_DECIMAL = re.compile(r"^(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d+)?$")
+_EN_DECIMAL = re.compile(r"^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
 
 
 def _sl_number_to_en(s):
@@ -398,48 +417,107 @@ def _sl_number_to_en(s):
     return s.replace(".", "\x00").replace(",", ".").replace("\x00", ",")
 
 
-def localize(text, src_lang, tgt_lang):
-    """Convert a whole-segment date, time or amount to the target locale.
+def _en_number_to_sl(s):
+    """12,450.00 -> 12.450,00."""
+    if not _EN_DECIMAL.fullmatch(s):
+        return None
+    return s.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 
-    Returns the text unchanged when nothing applies -- including for every
-    target other than English. German keeps the 24-hour clock and writes
-    "5. März 2024", so it needs its own rules and the manual says to verify
-    that pair before extending to it. Silently applying English conventions
-    to German output would be worse than doing nothing.
 
-    Deliberately conservative: only "14:30" is read as a time, never "14.30",
-    which in an isolated cell is far more likely to be a decimal number. A
-    wrong guess here would corrupt a value rather than merely misformat it.
-    """
-    if src_lang != "sl" or tgt_lang != "en":
-        return text
-    s = (text or "").strip()
-    if not s:
-        return text
-
+def _sl_to_en(s):
     m = _DATE_DMY.match(s)
     if m:
         d, mo, y = int(m.group(1)), int(m.group(2)), m.group(3)
         if 1 <= mo <= 12 and 1 <= d <= 31:
-            return f"{d} {_EN_MONTHS[mo - 1]} {y}"
-        return text
+            # "March 5, 2024" -- the form the translator specifies for
+            # English. Not "5 March 2024": that was this file's own invention
+            # and it was wrong.
+            return f"{_EN_MONTHS[mo - 1]} {d}, {y}"
+        return None
 
     m = _TIME_HM.match(s)
     if m:
         h, mi = int(m.group(1)), m.group(2)
         if 0 <= h <= 23 and 0 <= int(mi) <= 59:
-            suffix = "a.m." if h < 12 else "p.m."
-            h12 = h % 12 or 12
-            return f"{h12}:{mi} {suffix}"
-        return text
+            return f"{h % 12 or 12}:{mi} {'a.m.' if h < 12 else 'p.m.'}"
+        return None
 
     m = _AMOUNT.match(s)
     if m:
         num = _sl_number_to_en(m.group(1))
-        return f"{num} {m.group(2)}" if num else text
+        return f"{num} {m.group(2)}" if num else None
 
-    num = _sl_number_to_en(s)
-    return num if num else text
+    return _sl_number_to_en(s)
+
+
+def _en_to_sl(s):
+    m = _DATE_EN.match(s)
+    if m:
+        if m.group(1):                       # "March 5, 2024"
+            name, d, y = m.group(1), int(m.group(2)), m.group(3)
+        else:                                # "5 March 2024"
+            d, name, y = int(m.group(4)), m.group(5), m.group(6)
+        mo = [n.lower() for n in _EN_MONTHS].index(name.lower())
+        if 1 <= d <= 31:
+            # "5. marec 2024": the period marks an ordinal -- bare "5" would
+            # read as the cardinal number, not the fifth day -- and the month
+            # is lowercase, which Slovene requires.
+            #
+            # Nominative, deliberately. Running text often inflects to the
+            # genitive ("dne 5. marca 2024"), but "dne" has several tricky
+            # uses and this converter only ever sees a whole-segment date with
+            # no sentence around it to judge from. The translator reviews the
+            # draft regardless, so a stiff-reading date is cheap; guessing the
+            # case from no context would not be.
+            return f"{d}. {_SL_MONTHS[mo]} {y}"
+        return None
+
+    m = _TIME_AMPM.match(s)
+    if m:
+        h, mi, ap = int(m.group(1)), m.group(2), m.group(3).lower()
+        if 1 <= h <= 12 and 0 <= int(mi) <= 59:
+            h24 = (0 if h == 12 else h) if ap == "a" else (12 if h == 12 else h + 12)
+            # 24-hour, zero-padded: formal documents write 09:05 and 00:15,
+            # and a fixed width keeps a table column readable.
+            return f"{h24:02d}:{mi}"
+        return None
+
+    m = _AMOUNT.match(s)
+    if m:
+        num = _en_number_to_sl(m.group(1))
+        return f"{num} {m.group(2)}" if num else None
+
+    return _en_number_to_sl(s)
+
+
+def localize(text, src_lang, tgt_lang):
+    """Convert a whole-segment date, time or amount to the target locale.
+
+    Slovene writes "5. marec 2024" -- ordinal period after the day, month
+    lowercase, spaces between all three. English writes "March 5, 2024".
+    Neither "5 March 2024" nor "5. Marec 2024" is correct in either language.
+
+    Returns the text unchanged when nothing applies, and for every pair other
+    than sl<->en. German writes "5. März 2024" and keeps the 24-hour clock,
+    so it needs its own rules; the manual says to verify that pair before
+    extending to it, and applying English conventions to German silently
+    would be worse than doing nothing.
+
+    Deliberately conservative in two places. "14:30" is read as a time,
+    "14.30" never is -- in an isolated cell that is far more likely a decimal,
+    and a wrong guess would corrupt a value rather than merely misformat it.
+    An all-numeric date like 03/05/2024 is left alone in both directions,
+    because which number is the month cannot be known and guessing would move
+    the date by months.
+    """
+    s = (text or "").strip()
+    if not s:
+        return text
+    if src_lang == "sl" and tgt_lang == "en":
+        return _sl_to_en(s) or text
+    if src_lang == "en" and tgt_lang == "sl":
+        return _en_to_sl(s) or text
+    return text
 
 
 def is_translatable(s):
@@ -546,10 +624,13 @@ Rules:
   citations, article and paragraph references, personal names, and addresses.
 - Translate institution names into {TGT} (Okrožno sodišče v Ljubljani ->
   District Court in Ljubljana). They are not identifiers.
-- Convert to {TGT} convention without changing the value: dates
-  (5. 3. 2024 -> 5 March 2024), decimal and thousands separators
-  (12.450,00 -> 12,450.00), and 24-hour times (14.30 -> 2:30 p.m.).
-  Use day-month-year for every date; never switch format mid-document.
+- Convert dates, amounts and times to {TGT} convention without changing the
+  value. Into English: March 5, 2024 — month name, day, comma, year; decimal
+  point and thousands comma (12,450.00); 12-hour clock with a.m./p.m.
+  Into Slovene: 5. marec 2024 — the day takes a period because it is an
+  ordinal, the month name is lowercase, all three parts spaced; decimal
+  comma and thousands point (12.450,00); 24-hour clock, never a.m./p.m.
+  Use one date format throughout; never switch mid-document.
 - Never alter a numeric value. Formatting may follow {TGT} convention;
   the quantity, date, or time denoted must be identical.
 - If a passage is illegible or garbled, output [ILLEGIBLE] in its place
