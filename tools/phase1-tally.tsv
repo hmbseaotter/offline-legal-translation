@@ -1,0 +1,40 @@
+# Phase 1 tally. Fill in as you work; nothing here is document text.
+#
+# TIMING - minutes per page, one row per page.
+# Alternate the order rather than doing one whole set then the other.
+#
+page	set	minutes	notes
+1	scratch
+2	mt
+3	scratch
+4	mt
+5	scratch
+6	mt
+#
+# ratio = (mean minutes on mt pages) / (mean minutes on scratch pages)
+# At or above 1.0 the drafting is not paying for itself.
+#
+#
+# EDIT CLASSES - one tick per edit made to a draft. Rough counts are enough.
+#
+# The ratio says whether to proceed. This says whether a poor ratio is
+# fixable, and they are different questions. A 1.1 driven by terminology is
+# nearly free to fix -- there is no glossary yet, so that is the expected
+# shape of a first run. The same 1.1 driven by register means every sentence
+# needs rewriting, which no configuration solves.
+#
+class	ticks	what it means
+terminology		Right meaning, wrong term. Fixed by one glossary entry, forever
+register		Accurate but reads wrong for a court document
+numbers		A figure, date or case number altered or dropped. tr-lint should have caught these - if you are finding them by eye, say so
+additions		Words in the translation with no counterpart in the source, e.g. a statutory provision completed from memory
+omission		Something in the source missing from the translation
+formatting		Merged paragraphs, lost emphasis, table cells shifted
+other		Anything that fits none of the above - describe it
+#
+#
+# WORTH NOTING SEPARATELY
+#
+# - Any draft you abandoned and retranslated from scratch, and why.
+# - Anything the draft got right that you expected it to get wrong.
+# - Whether the bilingual layout helped or got in the way.
