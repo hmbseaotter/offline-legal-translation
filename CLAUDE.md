@@ -27,6 +27,8 @@ thing this project exists to prevent.
 | `~/translation-work/docs/` | Yes — reference documents, no case content |
 | `~/translation-work/confidential-projects/` | **NO — the entire tree** |
 | …/`<project>/source/`, `translated/`, `work/`, `logs/` | **NO** |
+| …/`work/inventory/manifest.tsv`, `by-lang/*.txt` | **NO — these are lists of file paths, and a filename in a criminal matter carries party names, dates and case numbers** |
+| …/`work/inventory/summary.txt` | Counts only, no paths — this is the file that may be sent to the client |
 | …/`<project>/glossary/project.tsv` | **NO — inside the denied tree** |
 | …/`_shared/` | **NO — inside the denied tree** |
 | `~/translation-work/regular-projects/` | **NO — client work, same rule** |
@@ -79,8 +81,15 @@ The correct response is to redesign the task, not to read the file.
     _shared/glossary/base.tsv        terminology reusable across matters
     _shared/prompts/translate.txt
     .active                          which project the tools operate on
-    <project>/source/  translated/  work/  logs/  glossary/project.tsv
+    <project>/source/                the client drop, nested folders intact
+              translated/            same tree, same names
+              work/inventory/        manifest.tsv, by-lang/*.txt, summary.txt
+              work/  logs/  glossary/project.tsv
 ```
+
+`source/` holds the client's folder structure exactly as delivered — several
+separate drops, nested several levels — and `translated/` mirrors it. Nothing
+flattens the tree.
 
 ## Tools
 
@@ -90,7 +99,8 @@ The correct response is to redesign the task, not to read the file.
 | `tr-project [--new] <name>` | List, create, or switch the active project |
 | `tr-setup` | One-time provisioning. Idempotent. |
 | `tr-model` | Register the GGUF with Ollama as `gams3:q8` |
-| `tr-fixtures [dir]` | Generate synthetic test documents |
+| `tr-fixtures [dir]` | Generate synthetic test documents, including a mixed-language drop |
+| `tr-inventory` | Classify every file in `source/` by source language. Run this before anything else |
 | `tr-status` | Diff `source/` against `translated/` |
 | `tr-run [-n] [file]` | Batch translate; resumable |
 | `tr-docx` / `tr-xlsx` / `tr-pdf` / `tr-txt` | Per-format workers |
@@ -109,18 +119,27 @@ Do not change these without discussing with the operator first.
    they did not, `tr-run` wrote `x.docx` while `tr-status` looked for
    `x.pdf`, so every PDF reported as missing and its output as orphaned,
    permanently.
-2. **Segment granularity is the sentence**, because that is the reviewer's
+2. **The client drop is not a clean corpus, and its shape is preserved.**
+   Files arrive as nested folder trees — often several separate drops — and
+   that structure is carried through `source/` to `translated/` untouched;
+   `tr-run` and `tr-status` already walk it at any depth. The tree also mixes
+   languages. `tr-inventory` classifies every file and only the ones in
+   `TR_SRC` are translated: a Croatian file pushed through an sl→en prompt
+   wastes hours of inference *and* writes a cached wrong answer into
+   `work/tm.sqlite` that is silently reused from then on. `tr-run` warns
+   loudly when no inventory exists rather than assuming the drop is clean.
+3. **Segment granularity is the sentence**, because that is the reviewer's
    unit of work and it makes the memory reusable across documents.
-3. **Abbreviations must not split sentences.** `ABBREV` in `lib/trlib.py`
+4. **Abbreviations must not split sentences.** `ABBREV` in `lib/trlib.py`
    holds the Slovene legal list (`št.` `čl.` `odst.` `d.o.o.` …). Adding
    entries is expected; removing them breaks review ergonomics.
-4. **Non-translatables pass through verbatim** — case numbers, dates,
+5. **Non-translatables pass through verbatim** — case numbers, dates,
    amounts, statute short forms. Patterns in `glossary/nontranslatable.txt`.
-5. **The memory is the resume state.** `work/tm.sqlite` keys on
+6. **The memory is the resume state.** `work/tm.sqlite` keys on
    `sha256(direction, model, prompt_version, source)`. Changing the prompt
    must bump `TR_PROMPT_VERSION` or stale translations get reused.
-6. **`tr-lint` runs no model.** It must stay deterministic and fast.
-7. **Projects are isolated.** Each has its own `work/tm.sqlite`. Translation
+7. **`tr-lint` runs no model.** It must stay deterministic and fast.
+8. **Projects are isolated.** Each has its own `work/tm.sqlite`. Translation
    memory must never be shared across matters — different clients, different
    confidentiality obligations. Glossary layers (shared base + project
    overlay); memory does not.
@@ -133,6 +152,22 @@ tr-xlsx fixtures/dokazi-velika.xlsx --survey   # no project needed
 python3 -c "import sys;sys.path.insert(0,'lib');import trlib;print(trlib.segment('Po čl. 211 odst. 2 KZ-1. Sodišče je odločilo.'))"
 # expect two segments, not four
 ```
+
+`tr-fixtures` also writes `fixtures/drop/` — a nested, two-drop,
+mixed-language tree, which is what `tr-inventory` is developed against.
+Point a throwaway project's `source/` at it and expect 3 Slovene, 2
+Croatian/Serbian, 1 English, 1 Armenian, 1 undetermined:
+
+```bash
+TR_PROJECTS=/tmp/tri tr-inventory      # after copying fixtures/drop/ to its source/
+```
+
+Language detection lives in `lib/trlang.py` and is built from the hunspell
+dictionaries `tr-setup` installs. It was calibrated against UDHR text — a
+separate source from the dictionaries, so the measurement is not circular —
+at 152/152 on 60-word samples with Slovene recall 25/25 and no false
+positives. Below `MIN_TOKENS` it abstains rather than guessing; short samples
+were the only place it ever erred.
 
 A mock model server is the right way to test the pipeline without waiting
 on real inference — it also keeps iteration fast. See the handover document.
