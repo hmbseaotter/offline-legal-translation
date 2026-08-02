@@ -62,7 +62,10 @@ if [[ $ONLY -eq 1 ]]; then
   echo "  Pay particular attention to: names, dates, case numbers, amounts,"
   echo "  and the characters c/s/z with carons."
   echo
-  echo "  then:  tr-pdf '$IN' '$OUT'"
+  # --ocr-only is normally given just the input, so $OUT is empty and the
+  # hint used to read: tr-pdf 'in.pdf' ''. Suggest the deliverable name the
+  # second stage would actually produce.
+  echo "  then:  tr-pdf '$IN' '${OUT:-$TR_ROOT/translated/$base.docx}'"
   exit 0
 fi
 
