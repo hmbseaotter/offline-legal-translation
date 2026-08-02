@@ -34,6 +34,18 @@ def main():
     src = walk(SRC)
     tgt = walk(TGT) if os.path.isdir(TGT) else set()
 
+    # Only the files triage found in the source language are ours to finish.
+    # Counting a Croatian exhibit as "missing" would leave every project
+    # permanently short of complete, which is the same way PDFs used to
+    # report before target_name() accounted for them.
+    want = os.environ.get("TR_SRC", "sl")
+    in_scope = trlib.manifest_paths(want)
+    held = 0
+    if in_scope is not None:
+        keep = set(in_scope)
+        held = len(src) - len(src & keep)
+        src &= keep
+
     done, missing, stale = [], [], []
     for rel in sorted(src):
         t = target_name(rel)
@@ -53,7 +65,11 @@ def main():
     orphans = sorted(tgt - {target_name(r) for r in src})
 
     print(f"project:    {trlib.project_name()}")
-    print(f"source:     {len(src)} files")
+    if in_scope is None:
+        print(f"source:     {len(src)} files   (no inventory - run tr-inventory)")
+    else:
+        print(f"source:     {len(src)} files in {want}"
+              f"   ({held} other-language held back by triage)")
     print(f"translated: {len(done)}")
     print(f"missing:    {len(missing)}")
     if stale:
