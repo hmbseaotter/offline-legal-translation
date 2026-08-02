@@ -284,9 +284,15 @@ def load_glossary():
     project inherits settled terminology without inheriting case content.
     """
     merged = {}
-    for f in (shared("glossary", "base.tsv"),
-              path("glossary", "project.tsv"),
-              path("glossary", "glossary.tsv")):   # legacy flat name
+    # The project overlay is resolved only when a project is actually
+    # active, for the reason spelled out in nontranslatables(): naming
+    # path() evaluates require_root() even for a caller that needs no
+    # project, and exits.
+    files = [shared("glossary", "base.tsv")]
+    if ROOT and os.path.isdir(ROOT):
+        files += [path("glossary", "project.tsv"),
+                  path("glossary", "glossary.tsv")]   # legacy flat name
+    for f in files:
         if not os.path.exists(f):
             continue
         for ln in open(f, encoding="utf-8"):
@@ -341,8 +347,10 @@ LANG = {"sl": "Slovene", "en": "English", "de": "German"}
 
 def build_prompt(src_lang, tgt_lang, gloss_block):
     base = _DEFAULT_PROMPT
-    for tpl in (shared("prompts", "translate.txt"),
-                path("prompts", "translate.txt")):   # project overrides shared
+    tpls = [shared("prompts", "translate.txt")]
+    if ROOT and os.path.isdir(ROOT):                 # see load_glossary()
+        tpls.append(path("prompts", "translate.txt"))   # project overrides shared
+    for tpl in tpls:
         if os.path.exists(tpl):
             base = open(tpl, encoding="utf-8").read()
     return base.replace("{SRC}", LANG.get(src_lang, src_lang)) \
