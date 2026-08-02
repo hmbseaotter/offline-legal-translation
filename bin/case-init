@@ -51,11 +51,28 @@ sudo mount "/dev/mapper/$MAP" "$MNT"
 sudo chown "$(id -u):$(id -g)" "$MNT"
 
 echo "==> creating shared layer inside the container"
-mkdir -p "$MNT/_shared/glossary" "$MNT/_shared/prompts"
+mkdir -p "$MNT/_shared/glossary"
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# base.tsv only. It is curated terminology with no in-code default, so the
+# copy in the container is the only copy there is, and seeding a starting
+# point is the whole point.
+#
+# nontranslatable.txt is NOT seeded, for the same reason as the prompt: the
+# patterns are regular expressions maintained in the kit, trlib reads the
+# kit's file as its base layer, and a copy here would only shadow later
+# corrections. Add to _shared/glossary/nontranslatable.txt deliberately if a
+# matter needs patterns the kit does not carry.
 cp -n "$KIT/glossary/glossary.tsv"        "$MNT/_shared/glossary/base.tsv" 2>/dev/null || true
-cp -n "$KIT/glossary/nontranslatable.txt" "$MNT/_shared/glossary/"          2>/dev/null || true
-cp -n "$KIT/prompts/translate.txt"        "$MNT/_shared/prompts/"           2>/dev/null || true
+# The prompt is NOT seeded here. build_prompt() prefers a copy in _shared
+# over the one compiled into lib/trlib.py, so seeding it froze the prompt at
+# whatever the kit said the day the container was made: every later
+# correction would be committed, pushed, and silently ignored by every
+# project inside. Worse, TR_PROMPT_VERSION lives in the kit and would go on
+# advancing, so the memory would mark segments with a version the text they
+# were produced from no longer matched.
+#
+# The glossary is different and is still seeded: it is curated data with no
+# in-code default, so a copy in the container is the only copy there is.
 echo "    projects are created with: tr-project --new <name>"
 
 echo "==> adding a header key backup (guards against header corruption)"

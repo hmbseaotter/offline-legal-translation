@@ -316,10 +316,19 @@ def nontranslatables():
     Outside a project the pattern list is the shared set alone, so counts
     can differ from the same command run inside one. That is said out loud
     rather than left to be discovered.
+
+    The kit's own file is the base layer. These are regular expressions
+    maintained in the repository, not curated per-installation data: the
+    pattern that matched every short all-caps word, so SKLEP and DA passed
+    through untranslated, was fixed in the kit. Had the kit's copy only ever
+    been seeded into a container, that fix would have reached no existing
+    matter. _shared and the project add to it; neither replaces it.
     """
     global _NONTRANS_CACHE
     if _NONTRANS_CACHE is None:
-        files = [shared("glossary", "nontranslatable.txt")]
+        kit = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "glossary", "nontranslatable.txt")
+        files = [kit, shared("glossary", "nontranslatable.txt")]
         if ROOT and os.path.isdir(ROOT):
             files.append(path("glossary", "nontranslatable.txt"))
         else:
@@ -613,6 +622,17 @@ def tm_put(src, tgt, direction):
 LANG = {"sl": "Slovene", "en": "English", "de": "German"}
 
 def build_prompt(src_lang, tgt_lang, gloss_block):
+    """_DEFAULT_PROMPT below, unless a file overrides it.
+
+    The default travels with the kit, so a correction reaches every project
+    as soon as the kit is updated. case-init deliberately does not seed a
+    copy into _shared: a copy there wins over this default and would freeze
+    the prompt at the day the container was created, while TR_PROMPT_VERSION
+    went on advancing without it. An override is still honoured if one is
+    placed there on purpose -- per matter at <project>/prompts/translate.txt,
+    or across matters at _shared/prompts/translate.txt -- which is the case
+    that rule exists for.
+    """
     base = _DEFAULT_PROMPT
     tpls = [shared("prompts", "translate.txt")]
     if ROOT and os.path.isdir(ROOT):                 # see load_glossary()

@@ -41,23 +41,29 @@ def projects():
                   and not d.startswith((".", "_")))
 
 def ensure_shared():
+    """Seed the shared layer with curated terminology, and nothing else.
+
+    base.tsv is copied because it is data the operator curates and there is
+    no in-code default: the copy in the container is the only copy there is.
+
+    The prompt and the non-translatable patterns are NOT copied, and this
+    mattered more here than in case-init: this runs on every new project, so
+    a matter created a year from now would still have been handed whatever
+    the kit said the first time any project was made. A copy of the prompt in
+    _shared overrides the one compiled into trlib, and a copy of the patterns
+    shadows nothing but duplicates everything -- trlib reads the kit's file
+    as its base layer for exactly that reason. Later corrections reach every
+    matter because there is no frozen copy in the way.
+
+    An override placed in _shared deliberately is still honoured; it is being
+    created automatically that was wrong.
+    """
     sd = trlib.SHARED
     os.makedirs(os.path.join(sd, "glossary"), exist_ok=True)
-    os.makedirs(os.path.join(sd, "prompts"), exist_ok=True)
     base = os.path.join(sd, "glossary", "base.tsv")
     if not os.path.exists(base):
         src = os.path.join(KIT, "glossary", "glossary.tsv")
         shutil.copy(src, base) if os.path.exists(src) else open(base, "w").close()
-    nt = os.path.join(sd, "glossary", "nontranslatable.txt")
-    if not os.path.exists(nt):
-        src = os.path.join(KIT, "glossary", "nontranslatable.txt")
-        if os.path.exists(src):
-            shutil.copy(src, nt)
-    pr = os.path.join(sd, "prompts", "translate.txt")
-    if not os.path.exists(pr):
-        src = os.path.join(KIT, "prompts", "translate.txt")
-        if os.path.exists(src):
-            shutil.copy(src, pr)
 
 def create(name):
     root = os.path.join(P, name)
