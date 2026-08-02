@@ -71,10 +71,23 @@ def main():
             if term.lower() in low_s and want.lower() not in tgt.lower():
                 findings.append(("GLOSS", f"'{term}' should render as '{want}'", src, tgt))
 
+        # finditer, not findall: findall yields the capture groups whenever a
+        # pattern has any, so '123-45/2024-6' arrived here as '-6' and
+        # '12.450,00 EUR' as 'EUR'. The check then tested text that was never
+        # at issue -- raising findings for fragments nothing had touched while
+        # missing the identifiers that had actually been dropped. group(0) is
+        # the match. The patterns overlap by design -- 'KZ-1' is matched by
+        # both statute rules and 'EUR' sits inside the amount rule's match --
+        # so a fragment already covered by a longer one is dropped rather
+        # than reported twice. File order puts the specific rules first.
+        seen = set()
         for pat in trlib.nontranslatables():
-            for m in pat.findall(src):
-                frag = m if isinstance(m, str) else m[0]
-                if frag and frag not in tgt:
+            for m in pat.finditer(src):
+                frag = m.group(0)
+                if not frag or any(frag in s for s in seen):
+                    continue
+                seen.add(frag)
+                if frag not in tgt:
                     findings.append(("NONTR", f"'{frag}' altered or dropped", src, tgt))
 
     for (src, direction), tgts in by_src.items():
