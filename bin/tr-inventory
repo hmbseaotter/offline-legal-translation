@@ -109,21 +109,33 @@ def from_text(path, limit=SAMPLE_WORDS):
     return _cap(raw.split(), limit), "text"
 
 
-def _ocr_cache(path):
-    """Where tr-pdf keeps the OCR text layer for this file, if it has one.
+def _ocr_key(path):
+    """tr-pdf's cache key for this file: the path under source/, flattened.
 
-    Same naming as tr-pdf so the expensive pass is done once and shared. Note
-    that tr-pdf keys on the basename alone, so two exhibits with the same
-    filename in different drops share a cache entry -- a real hazard given
-    drops arrive nested and filenames are preserved. Read-only here, and
-    flagged rather than worked around.
+    Not the basename. Two exhibits called zapisnik.pdf in different drops
+    would have shared one entry, and the second would have been translated
+    from the first one's text layer with nothing in the output to show it.
+    Drops arrive nested and filenames are preserved by design, so duplicate
+    names across drops are expected rather than unlucky. tr-pdf builds the
+    same key; the two must agree or the cache is never hit.
     """
+    root = trlib.ROOT
+    if not root:
+        return None
+    src = os.path.join(root, "source") + os.sep
+    full = os.path.abspath(path)
+    if not full.startswith(src):
+        return None
+    return os.path.splitext(full[len(src):])[0].replace(os.sep, "__")
+
+
+def _ocr_cache(path):
+    """The cached OCR text layer for this file, if tr-pdf has made one."""
     try:
-        root = trlib.ROOT
-        if not root:
+        key = _ocr_key(path)
+        if not key:
             return None
-        base = os.path.splitext(os.path.basename(path))[0]
-        cached = os.path.join(root, "work", "ocr", base + ".txt")
+        cached = os.path.join(trlib.ROOT, "work", "ocr", key + ".txt")
         return cached if os.path.exists(cached) else None
     except Exception:
         return None
@@ -207,9 +219,9 @@ def _full_ocr(path, limit):
         return "", "pdf-needs-ocr (ocrmypdf missing)"
     ocrdir = os.path.join(root, "work", "ocr")
     os.makedirs(ocrdir, exist_ok=True)
-    base = os.path.splitext(os.path.basename(path))[0]
-    out_pdf = os.path.join(ocrdir, base + ".ocr.pdf")
-    out_txt = os.path.join(ocrdir, base + ".txt")
+    key = _ocr_key(path) or os.path.splitext(os.path.basename(path))[0]
+    out_pdf = os.path.join(ocrdir, key + ".ocr.pdf")
+    out_txt = os.path.join(ocrdir, key + ".txt")
     langs = os.environ.get("TR_OCR_LANGS", "slv+eng")
     try:
         if not os.path.exists(out_pdf):

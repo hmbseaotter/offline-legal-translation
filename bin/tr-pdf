@@ -40,7 +40,21 @@ mkdir -p "$OCRDIR"
 
 ONLY=0; [[ "${1:-}" == "--ocr-only" ]] && { ONLY=1; shift; }
 IN="$1"; OUT="${2:-}"
-base="$(basename "${IN%.*}")"
+# Cache key: the path relative to source/, flattened, not the basename.
+# Keying on the basename meant drop-A/zapisnik.pdf and drop-B/zapisnik.pdf
+# shared one cache entry -- the second file would have been "translated"
+# from the first one's text layer, silently and with no sign of it in the
+# output. Drops arrive nested and filenames are preserved by design, so
+# duplicate names across drops are expected rather than unlucky.
+rel="${IN#"$TR_ROOT/source/"}"
+if [[ "$rel" == "$IN" ]]; then
+  # Not under source/ -- an ad hoc --ocr-only on some other path. Keep it
+  # readable but make it unique to the full path.
+  rel="$(basename "${IN%.*}")-$(printf '%s' "$IN" | sha256sum | cut -c1-8)"
+else
+  rel="${rel%.*}"
+fi
+base="${rel//\//__}"
 pdf="$OCRDIR/$base.ocr.pdf"
 txt="$OCRDIR/$base.txt"
 
