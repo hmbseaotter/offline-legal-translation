@@ -1,25 +1,43 @@
 {
+  "_comment": [
+    "A backstop, not the control. The control is that the container stays",
+    "closed during a session and the kit lives on a different branch of the",
+    "filesystem than the data. See CLAUDE.md.",
+    "Deny is scoped to the two data directories rather than to all of",
+    "translation-work/. docs/ holds the reference manuals, contains no case",
+    "material, and every document in the set states that Claude Code may",
+    "read it -- denying the whole parent made that statement false.",
+    "_shared/ is inside the denied tree and stays denied: reaching it at all",
+    "would require the container mounted, which the guard already forbids",
+    "during a session, so an 'ask' rule there was unreachable either way."
+  ],
   "permissions": {
     "defaultMode": "acceptEdits",
     "deny": [
-      "Read(//home/seaotter/translation-work/**)",
-      "Edit(//home/seaotter/translation-work/**)",
-      "Write(//home/seaotter/translation-work/**)",
-      "Bash(cat //home/seaotter/translation-work/**)",
-      "Bash(head //home/seaotter/translation-work/**)",
-      "Bash(tail //home/seaotter/translation-work/**)",
-      "Bash(less //home/seaotter/translation-work/**)",
-      "Bash(grep * //home/seaotter/translation-work/**)",
+      "Read(//home/seaotter/translation-work/confidential-projects/**)",
+      "Edit(//home/seaotter/translation-work/confidential-projects/**)",
+      "Write(//home/seaotter/translation-work/confidential-projects/**)",
+      "Read(//home/seaotter/translation-work/regular-projects/**)",
+      "Edit(//home/seaotter/translation-work/regular-projects/**)",
+      "Write(//home/seaotter/translation-work/regular-projects/**)",
+      "Bash(cat /home/seaotter/translation-work/confidential-projects/*)",
+      "Bash(head /home/seaotter/translation-work/confidential-projects/*)",
+      "Bash(tail /home/seaotter/translation-work/confidential-projects/*)",
+      "Bash(less /home/seaotter/translation-work/confidential-projects/*)",
+      "Bash(pdftotext)",
       "Bash(pdftotext *)",
+      "Bash(tr-run)",
       "Bash(tr-run *)",
+      "Bash(tr-pdf)",
+      "Bash(tr-pdf *)",
+      "Bash(case-open)",
       "Bash(case-open *)",
       "Bash(curl *)",
       "Bash(scp *)",
       "Bash(rsync *)"
     ],
     "ask": [
-      "Bash(git push *)",
-      "Read(//home/seaotter/translation-work/confidential-projects/_shared/**)"
+      "Bash(git push *)"
     ],
     "allow": [
       "Bash(tr-fixtures *)",

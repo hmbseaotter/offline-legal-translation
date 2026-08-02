@@ -27,11 +27,20 @@ thing this project exists to prevent.
 | `~/translation-work/docs/` | Yes — reference documents, no case content |
 | `~/translation-work/confidential-projects/` | **NO — the entire tree** |
 | …/`<project>/source/`, `translated/`, `work/`, `logs/` | **NO** |
-| …/`<project>/glossary/project.tsv` | Ask the operator — case-specific |
-| …/`_shared/` | Ask the operator — general terminology, usually fine |
+| …/`<project>/glossary/project.tsv` | **NO — inside the denied tree** |
+| …/`_shared/` | **NO — inside the denied tree** |
+| `~/translation-work/regular-projects/` | **NO — client work, same rule** |
+
+`_shared/` holds general terminology and is the one place where a case-by-case
+judgement would be defensible. It is denied anyway, because reaching it at
+all requires the container mounted, and the guard refuses to start a session
+in that state — so a rule that asked would never have been reached.
 
 The container mounts at `~/translation-work/confidential-projects/`. When it
 is closed that path is empty, which is the desired state during any session.
+An empty directory there is **not** proof the container exists: until
+`case-init` has run it is a plain unencrypted directory. `case-status` is the
+only thing that tells you which it is.
 
 ### Practical consequences
 
