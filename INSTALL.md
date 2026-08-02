@@ -2,12 +2,14 @@
 
 **Target:** `~/Claude_Stuff/cli_projects/translation-tools/`
 
-This ZIP's contents go directly into that folder (no wrapper directory).
+The kit is a git repository, distributed as a private repository on GitHub.
+Clone it — do not unpack it from an archive. A copy extracted from a ZIP has
+no `.git`, and without that the hook that keeps client documents out of the
+repository cannot be installed at all.
 
 ```bash
 export KIT=~/Claude_Stuff/cli_projects/translation-tools
-mkdir -p "$KIT"
-unzip translation-tools.zip -d "$KIT"
+git clone git@github.com:hmbseaotter/offline-translation-kit.git "$KIT"
 chmod +x "$KIT"/bin/*
 
 # adjust the username in the deny paths to match your account
@@ -20,14 +22,16 @@ source ~/.bashrc
 "$KIT"/bin/tr-setup
 ```
 
-`tr-setup` points the repository at `.githooks` for you. If you unpack the
-kit somewhere that is already a git repository and skip `tr-setup`, do it
-by hand — a global `core.hooksPath` shadows `.git/hooks` entirely, so until
-this is set the hook that keeps client documents out of the repo never runs:
+`tr-setup` points the repository at `.githooks` for you, and says so. A global
+`core.hooksPath` shadows `.git/hooks` entirely, so until this is set the hook
+that blocks a `git add -f` of a client document never runs. To do it by hand:
 
 ```bash
 git -C "$KIT" config core.hooksPath .githooks
 ```
+
+If you ever do have only an archive copy, treat it as unprotected: `git init`
+it and set `core.hooksPath` before adding anything.
 
 Then follow `~/translation-work/docs/01-operating-manual` §3.
 

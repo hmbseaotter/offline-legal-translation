@@ -28,7 +28,7 @@ thing this project exists to prevent.
 | `~/translation-work/confidential-projects/` | **NO — the entire tree** |
 | …/`<project>/source/`, `translated/`, `work/`, `logs/` | **NO** |
 | …/`work/inventory/manifest.tsv`, `by-lang/*.txt` | **NO — these are lists of file paths, and a filename in a criminal matter carries party names, dates and case numbers** |
-| …/`work/inventory/summary.txt` | Counts only, no paths — this is the file that may be sent to the client |
+| …/`work/inventory/summary.txt` | **NO — inside the denied tree.** It holds counts and no paths, which is what makes it safe for *the operator* to send to the client. That is a different question from whether a session may read it |
 | …/`<project>/glossary/project.tsv` | **NO — inside the denied tree** |
 | …/`_shared/` | **NO — inside the denied tree** |
 | `~/translation-work/regular-projects/` | **NO — client work, same rule** |
@@ -72,7 +72,7 @@ The correct response is to redesign the task, not to read the file.
 ```
 ~/Claude_Stuff/cli_projects/
   translation-tools/                 this repo — no case data, ever
-    bin/  lib/  glossary/  prompts/
+    bin/  lib/  glossary/  prompts/  tools/  .githooks/
     fixtures/                        synthetic test docs (gitignored)
 
 ~/translation-work/
@@ -102,7 +102,7 @@ flattens the tree.
 | `tr-fixtures [dir]` | Generate synthetic test documents, including a mixed-language drop |
 | `tr-inventory` | Classify every file in `source/` by source language. Run this before anything else |
 | `tr-status` | Diff `source/` against `translated/` |
-| `tr-run [-n] [file]` | Batch translate; resumable |
+| `tr-run [-n] [--all] [file]` | Batch translate; resumable. Without `--all`, only what the inventory matched |
 | `tr-docx` / `tr-xlsx` / `tr-pdf` / `tr-txt` | Per-format workers |
 | `tr-lint` | Deterministic checks over the memory |
 
@@ -158,16 +158,32 @@ mixed-language tree, which is what `tr-inventory` is developed against.
 Point a throwaway project's `source/` at it and expect 3 Slovene, 2
 Croatian/Serbian, 1 English, 1 Armenian, 1 undetermined:
 
+`tr-inventory` reads the *active project*, so a throwaway root needs a project
+inside it and an `.active` marker naming it — `TR_PROJECTS` alone resolves to
+"no active project" and exits 2:
+
 ```bash
-TR_PROJECTS=/tmp/tri tr-inventory      # after copying fixtures/drop/ to its source/
+mkdir -p /tmp/tri/probe/source
+cp -a fixtures/drop/. /tmp/tri/probe/source/
+printf 'probe\n' > /tmp/tri/.active
+TR_PROJECTS=/tmp/tri tr-inventory
 ```
 
+`TR_PROJECTS` is also what lifts the container-mounted requirement, which is
+why a throwaway root works at all outside the encrypted container.
+
 Language detection lives in `lib/trlang.py` and is built from the hunspell
-dictionaries `tr-setup` installs. It was calibrated against UDHR text — a
-separate source from the dictionaries, so the measurement is not circular —
-at 152/152 on 60-word samples with Slovene recall 25/25 and no false
-positives. Below `MIN_TOKENS` it abstains rather than guessing; short samples
-were the only place it ever erred.
+dictionaries `tr-setup` installs — so none of this runs until `tr-setup` has.
+It was calibrated against UDHR text (a separate source from the dictionaries,
+so the measurement is not circular) at 152/152 on 60-word samples, Slovene
+recall 25/25, no false positives; and at 357/365 on 25-word samples with
+three false positives.
+
+`MIN_TOKENS` is **60**, the shorter of the two lengths measured at zero false
+positives — not a value between the two runs, where nothing was measured.
+Below it the detector abstains. The UDHR samples are not in the repository;
+`tools/calibrate_lang.py` re-measures against any labelled sample set, and
+should be run after any change to the scoring.
 
 A mock model server is the right way to test the pipeline without waiting
 on real inference — it also keeps iteration fast. See the handover document.

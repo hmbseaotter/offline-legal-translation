@@ -18,6 +18,8 @@ sudo apt update -qq
 # The hunspell dictionaries are what tr-inventory detects source language
 # with -- not a spellchecker here, a word list. Without them triage cannot
 # run and every file in a mixed client drop would be treated as Slovene.
+# No hunspell-hy: Armenian is settled by its Unicode block before any
+# vocabulary is consulted, so that package was installed and never read.
 #
 # tesseract-ocr-hrv and -srp-latn are for the sampling pass only: a scanned
 # PDF has no text to detect from, so tr-inventory OCRs a page or two with
@@ -25,7 +27,7 @@ sudo apt update -qq
 sudo apt install -y ocrmypdf poppler-utils \
      tesseract-ocr tesseract-ocr-slv tesseract-ocr-eng tesseract-ocr-deu \
      tesseract-ocr-hrv tesseract-ocr-srp-latn \
-     hunspell-sl hunspell-hr hunspell-sr hunspell-hy hunspell-en-us \
+     hunspell-sl hunspell-hr hunspell-sr hunspell-en-us \
      python3-pip python3-venv qpdf unpaper lsof
 
 echo "==> python environment (outside the container, so it survives unmount)"

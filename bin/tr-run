@@ -5,9 +5,12 @@
 # every segment already in the translation memory is reused rather than
 # regenerated. Killing this mid-run and restarting loses at most one segment.
 #
-# Usage:  tr-run                 # translate everything missing
+# Usage:  tr-run                 # translate what tr-inventory found in TR_SRC
 #         tr-run -n              # dry run: list what would be done
+#         tr-run --all           # ignore the inventory, translate everything
 #         tr-run path/to/one.docx
+#
+# -n and --all may be given in either order, and combine.
 
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,7 +71,20 @@ LOG="$TR_ROOT/logs/run-$(date +%Y%m%d-%H%M%S).log"
 SUFFIX="${TR_SUFFIX:-}"
 mkdir -p "$OUT" "$TR_ROOT/logs" "$TR_ROOT/work"
 
-DRY=0; [[ "${1:-}" == "-n" ]] && { DRY=1; shift; }
+# Flags in any order. Parsing -n here and --all a hundred lines further down
+# meant `tr-run --all -n` consumed --all, then treated -n as a filename and
+# died in realpath.
+DRY=0; ALL=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n)    DRY=1; shift ;;
+    --all) ALL=1; shift ;;
+    --)    shift; break ;;
+    -*)    echo "unknown option: $1" >&2
+           echo "usage: tr-run [-n] [--all] [file ...]" >&2; exit 2 ;;
+    *)     break ;;
+  esac
+done
 
 # A scanned PDF cannot be regenerated as a PDF, and plain text has no
 # formatting to preserve, so both deliver a .docx. This mirrors OUT_EXT in
@@ -110,15 +126,31 @@ worker_for() {                       # extension -> worker, empty if unsupported
 # tr-inventory has classified the tree, translate only the files it found in
 # the source language, and say how many were held back.
 MANIFEST="$TR_ROOT/work/inventory/manifest.tsv"
-ALL=0; [[ "${1:-}" == "--all" ]] && { ALL=1; shift; }
 HELD=0
+
+# The manifest's column order is not a constant to hardcode. lib/trlib.py
+# reads the header by name; doing anything else here would mean the two
+# disagree the first time a column is inserted, and awk would silently
+# filter on whatever now sits in position 5.
+manifest_col() {                     # column name -> 1-based index, empty if absent
+  awk -F'\t' -v want="$1" 'NR==1 {
+      for (i = 1; i <= NF; i++) if ($i == want) { print i; exit }
+    }' "$MANIFEST"
+}
 
 if [[ $# -gt 0 ]]; then
   mapfile -t FILES < <(for f in "$@"; do realpath --relative-to="$SRC" "$f"; done)
 elif [[ -f "$MANIFEST" && $ALL -eq 0 ]]; then
   want="${TR_SRC:-sl}"
-  mapfile -t FILES < <(awk -F'\t' -v w="$want" 'NR>1 && $5==w {print $1}' "$MANIFEST" | sort)
-  HELD=$(awk -F'\t' -v w="$want" 'NR>1 && $5!=w' "$MANIFEST" | wc -l)
+  c_path="$(manifest_col path)"; c_lang="$(manifest_col lang)"
+  if [[ -z "$c_path" || -z "$c_lang" ]]; then
+    echo "manifest has no 'path'/'lang' header: $MANIFEST" >&2
+    echo "re-run: tr-inventory --rescan" >&2
+    exit 2
+  fi
+  mapfile -t FILES < <(awk -F'\t' -v w="$want" -v p="$c_path" -v l="$c_lang" \
+                        'NR>1 && $l==w {print $p}' "$MANIFEST" | sort)
+  HELD=$(awk -F'\t' -v w="$want" -v l="$c_lang" 'NR>1 && $l!=w' "$MANIFEST" | wc -l)
 else
   mapfile -t FILES < <(cd "$SRC" && find . -type f ! -name '~$*' ! -name '.*' \
                         -printf '%P\n' | sort)

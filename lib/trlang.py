@@ -34,22 +34,53 @@ built from dictionaries, so this is not circular):
   60-word samples    152/152 correct, Slovene recall 25/25, 0 false positives
   25-word samples    357/365 correct, Slovene recall 61/61, 3 false positives
 
-That is why MIN_TOKENS is what it is. UDHR is thin and general-register, so
-treat those figures as a floor on legal text, not a guarantee.
+MIN_TOKENS is 60 because 60 is the shorter of the two lengths actually
+measured at zero false positives. It was 40 -- a value between the two runs
+above, where nothing was measured at all, and where the 25-word result says
+errors do occur. A wrong label is not a cosmetic error: the file goes
+through the wrong prompt and the wrong answer is cached in work/tm.sqlite
+and reused silently, so the threshold sits on measured ground.
+
+Reproducing the figures: tools/calibrate_lang.py takes a directory of
+labelled samples and reports accuracy per length. The UDHR samples are not
+committed -- they are third-party text and this repository holds no corpora
+-- so the numbers above are a record of a run, not something the repository
+can re-derive on its own. Point the harness at a labelled sample set to
+re-measure after any change to the scoring.
+
+UDHR is thin and general-register, so treat those figures as a floor on
+legal text, not a guarantee.
 """
 import os, re, sys
 
 DICT_DIR = os.environ.get("TR_DICTS", "/usr/share/hunspell")
 
 # Hunspell dictionaries. Installed by tr-setup:
-#   apt install hunspell-sl hunspell-hr hunspell-sr hunspell-hy
+#   apt install hunspell-sl hunspell-hr hunspell-sr hunspell-en-us
+#
+# There is deliberately no Armenian entry. Armenian is settled by its Unicode
+# block before any vocabulary is consulted, so a dictionary would be loaded
+# and never read -- and the apt package for it was being installed for
+# nothing.
 DICT_FILES = {
     "sl":      ["sl_SI.dic"],
     "hr":      ["hr_HR.dic"],
     "sr_latn": ["sr_Latn_RS.dic"],
     "sr_cyrl": ["sr_RS.dic"],
-    "hy":      ["hy_AM.dic", "hy.dic"],
     "en":      ["en_US.dic", "en_GB.dic"],
+}
+
+# Every language whose dictionary detect() actually consults. sr_cyrl belongs
+# here even though only the Cyrillic branch uses it: without it that branch
+# scores every Serbian-Cyrillic document at 0% and returns "undetermined",
+# which looks like an honest abstention and is really a missing file.
+REQUIRED = ("sl", "hr", "sr_latn", "sr_cyrl", "en")
+
+# What to install for each, so the error message can name the right package.
+APT_PACKAGE = {
+    "sl": "hunspell-sl", "hr": "hunspell-hr",
+    "sr_latn": "hunspell-sr", "sr_cyrl": "hunspell-sr",
+    "en": "hunspell-en-us",
 }
 
 # What the operator sees, and what the client is told.
@@ -63,7 +94,7 @@ LABEL = {
 
 TARGET = "sl"                 # the only class that gets translated
 
-MIN_TOKENS = 40               # below this, abstain rather than guess
+MIN_TOKENS = 60               # below this, abstain rather than guess
 MIN_CONFIDENCE = 0.30
 
 ARMENIAN = re.compile(r"[԰-֏]")
@@ -153,15 +184,19 @@ class Detector:
             "en":  en - sl - hbs,
         }
 
+    def missing_required(self):
+        return [l for l in REQUIRED if l in self.missing]
+
     def ready(self):
-        return not [l for l in ("sl", "hr", "sr_latn", "en") if l in self.missing]
+        return not self.missing_required()
 
     def why_not_ready(self):
+        lacking = self.missing_required()
+        pkgs = sorted({APT_PACKAGE[l] for l in lacking if l in APT_PACKAGE})
         return ("language dictionaries missing from " + self.dir +
-                " for: " + ", ".join(self.missing) +
-                "\n  install: sudo apt install hunspell-sl hunspell-hr "
-                "hunspell-sr hunspell-hy\n  or point TR_DICTS at a directory "
-                "holding the .dic files.")
+                " for: " + ", ".join(lacking) +
+                "\n  install: sudo apt install " + " ".join(pkgs) +
+                "\n  or point TR_DICTS at a directory holding the .dic files.")
 
     def detect(self, text):
         """-> (lang, confidence 0..1, note). lang is a key of LABEL."""

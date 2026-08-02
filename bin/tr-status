@@ -32,6 +32,7 @@ def main():
     if not os.path.isdir(SRC):
         sys.exit(f"no source directory: {SRC}")
     src = walk(SRC)
+    src_all = set(src)          # before triage narrows it; see orphans below
     tgt = walk(TGT) if os.path.isdir(TGT) else set()
 
     # Only the files triage found in the source language are ours to finish.
@@ -62,7 +63,12 @@ def main():
             print(os.path.join(SRC, r))
         return
 
-    orphans = sorted(tgt - {target_name(r) for r in src})
+    # An orphan is a deliverable with no source behind it at all -- so it is
+    # measured against every file in source/, not against the triage-narrowed
+    # set. Comparing with the narrowed set reported every output of a
+    # `tr-run --all` as orphaned, which was plainly untrue: those files have
+    # sources, just ones triage held back.
+    orphans = sorted(tgt - {target_name(r) for r in src_all})
 
     print(f"project:    {trlib.project_name()}")
     if in_scope is None:

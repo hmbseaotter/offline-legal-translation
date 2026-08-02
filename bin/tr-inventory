@@ -179,15 +179,23 @@ def main():
                 continue
             files.append(os.path.relpath(os.path.join(dp, fn), src))
     files.sort()
+    # --limit caps the work, never the record. Writing the manifest from a
+    # limited run used to delete every entry outside the slice: resume state
+    # went with it, and summary.txt -- the file sent to the client -- then
+    # reported a fraction of the drop with nothing to say it was partial.
+    deferred = []
     if a.limit:
-        files = files[:a.limit]
+        files, deferred = files[:a.limit], files[a.limit:]
 
     rows, reused = [], 0
     for i, rel in enumerate(files, 1):
         full = os.path.join(src, rel)
         st = os.stat(full)
         old = prior.get(rel)
-        if old and old.get("bytes") == str(st.st_size) \
+        # A deferred row matches on size and mtime like any other, so without
+        # this it would be "reused" forever and never actually examined.
+        if old and old.get("method") != "not-yet-examined" \
+                and old.get("bytes") == str(st.st_size) \
                 and old.get("mtime") == f"{st.st_mtime:.0f}":
             rows.append(old); reused += 1
         else:
@@ -204,6 +212,26 @@ def main():
         sys.stderr.write(f"\r  {i}/{len(files)} ")
         sys.stderr.flush()
     sys.stderr.write("\n")
+
+    # Carry forward everything the limit deferred, so the manifest still
+    # describes the whole drop. Files never yet examined are recorded as
+    # pending rather than silently omitted -- an absent row and an
+    # undetermined row mean different things to whoever reads this next.
+    for rel in deferred:
+        old = prior.get(rel)
+        if old:
+            rows.append(old)
+            continue
+        try:
+            st = os.stat(os.path.join(src, rel))
+        except OSError:
+            continue
+        rows.append({"path": rel, "ext": os.path.splitext(rel)[1].lower(),
+                     "bytes": str(st.st_size), "mtime": f"{st.st_mtime:.0f}",
+                     "lang": "unknown", "confidence": "0.00",
+                     "method": "not-yet-examined",
+                     "note": "deferred by --limit; re-run without it"})
+    rows.sort(key=lambda r: r["path"])
 
     cols = ["path", "ext", "bytes", "mtime", "lang", "confidence", "method", "note"]
     with open(manifest, "w", encoding="utf-8", newline="") as fh:
@@ -223,11 +251,18 @@ def main():
                   encoding="utf-8") as fh:
             fh.write("\n".join(sorted(paths)) + "\n")
 
-    counts = Counter(r["lang"] for r in rows)
+    # "Not examined yet" is not a detection result. Counting deferred files
+    # as undetermined would report a confident-looking language breakdown
+    # that is really a description of how far the scan got.
+    examined = [r for r in rows if r.get("method") != "not-yet-examined"]
+    pending = len(rows) - len(examined)
+    counts = Counter(r["lang"] for r in examined)
     fmts = Counter(r["ext"] or "(none)" for r in rows)
     lines = []
     lines.append(f"Project:        {trlib.project_name()}")
     lines.append(f"Files inventoried: {len(rows)}")
+    if pending:
+        lines.append(f"  of which examined: {len(examined)}")
     lines.append("")
     lines.append("By detected source language:")
     for lang, n in counts.most_common():
@@ -242,6 +277,11 @@ def main():
         lines.append("")
         lines.append(f"{undet} file(s) undetermined - listed in "
                      f"by-lang/unknown.txt for manual review.")
+    if pending:
+        lines.append("")
+        lines.append(f"INCOMPLETE: {pending} file(s) not yet examined "
+                     f"(--limit was used). Re-run tr-inventory without "
+                     f"--limit before sending this summary anywhere.")
     summary = "\n".join(lines) + "\n"
 
     with open(os.path.join(outdir, "summary.txt"), "w", encoding="utf-8") as fh:
