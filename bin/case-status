@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# case-status - is the case container open, and is it safe to start Claude Code?
+set -uo pipefail
+IMG="${CASE_IMG:-$HOME/.case/confidential.luks}"
+MAP="${CASE_MAP:-casedata}"
+MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
+
+if mountpoint -q "$MNT" 2>/dev/null; then
+  echo "OPEN    $MNT is mounted"
+  df -h "$MNT" | tail -1 | awk '{print "        "$3" used, "$4" free ("$5")"}'
+  n=$(find "$MNT/source" -type f 2>/dev/null | wc -l)
+  t=$(find "$MNT/translated" -type f 2>/dev/null | wc -l)
+  echo "        $n source files, $t translated"
+  echo
+  echo "        Claude Code will REFUSE to start. Run case-close first."
+  exit 0
+fi
+
+echo "CLOSED  $MNT is not mounted"
+[[ -f "$IMG" ]] && echo "        container: $IMG ($(du -h --apparent-size "$IMG" 2>/dev/null | cut -f1) allocated, $(du -h "$IMG" 2>/dev/null | cut -f1) on disk)"
+if lsattr -d "$MNT" 2>/dev/null | grep -q -- '-i-'; then
+  echo "        mountpoint is immutable - safe from stray writes"
+else
+  echo "        WARNING: mountpoint is writable while closed."
+  echo "        A tool run now would write plaintext to $MNT."
+fi
+echo
+echo "        Safe to start Claude Code."

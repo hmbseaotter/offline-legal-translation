@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""tr-project - list, show, or switch the active confidential project.
+
+Usage:
+  tr-project                 show active project and list all
+  tr-project <name>          make <name> active
+  tr-project --new <name>    scaffold a new project and make it active
+  tr-project --none          clear the active project
+
+Every other tool reads the active project, so setting it wrong is the one
+new way this layout can go wrong. tr-run prints the active project before
+doing anything, and refuses to run when none is set.
+"""
+import os, sys, shutil
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+import trlib
+
+P = trlib.PROJECTS
+MARK = os.path.join(P, ".active")
+KIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+SUBDIRS = ["source", "translated", "work/ocr", "logs", "glossary", "prompts"]
+
+def container_open():
+    return os.path.isdir(P)
+
+def active():
+    if os.path.exists(MARK):
+        return open(MARK, encoding="utf-8").read().strip() or None
+    return None
+
+def projects():
+    if not container_open():
+        return []
+    return sorted(d for d in os.listdir(P)
+                  if os.path.isdir(os.path.join(P, d))
+                  and not d.startswith((".", "_")))
+
+def ensure_shared():
+    sd = trlib.SHARED
+    os.makedirs(os.path.join(sd, "glossary"), exist_ok=True)
+    os.makedirs(os.path.join(sd, "prompts"), exist_ok=True)
+    base = os.path.join(sd, "glossary", "base.tsv")
+    if not os.path.exists(base):
+        src = os.path.join(KIT, "glossary", "glossary.tsv")
+        shutil.copy(src, base) if os.path.exists(src) else open(base, "w").close()
+    nt = os.path.join(sd, "glossary", "nontranslatable.txt")
+    if not os.path.exists(nt):
+        src = os.path.join(KIT, "glossary", "nontranslatable.txt")
+        if os.path.exists(src):
+            shutil.copy(src, nt)
+    pr = os.path.join(sd, "prompts", "translate.txt")
+    if not os.path.exists(pr):
+        src = os.path.join(KIT, "prompts", "translate.txt")
+        if os.path.exists(src):
+            shutil.copy(src, pr)
+
+def create(name):
+    root = os.path.join(P, name)
+    if os.path.exists(root):
+        sys.exit(f"project already exists: {root}")
+    ensure_shared()
+    for s in SUBDIRS:
+        os.makedirs(os.path.join(root, s), exist_ok=True)
+    with open(os.path.join(root, "glossary", "project.tsv"), "w",
+              encoding="utf-8") as fh:
+        fh.write("# Case-specific terms. Overrides _shared/glossary/base.tsv.\n"
+                 "# source<TAB>target<TAB>note\n")
+    with open(os.path.join(root, "project.conf"), "w", encoding="utf-8") as fh:
+        fh.write(f"# {name}\n"
+                 "# Sourced by tr-run. Uncomment and adjust as needed.\n"
+                 "TR_SRC=sl\nTR_TGT=en\n"
+                 "# TR_SUFFIX=_translated\n"
+                 "TR_OCR_LANGS=slv+eng\n")
+    print(f"created {root}")
+    for s in SUBDIRS:
+        print(f"  {s}/")
+    return root
+
+def set_active(name):
+    if not os.path.isdir(os.path.join(P, name)):
+        sys.exit(f"no such project: {name}\nrun: tr-project --new {name}")
+    with open(MARK, "w", encoding="utf-8") as fh:
+        fh.write(name + "\n")
+    print(f"active project: {name}")
+    print(f"  {os.path.join(P, name)}")
+
+def main():
+    args = sys.argv[1:]
+
+    if not container_open():
+        sys.exit(f"container not mounted: {P}\nrun: case-open")
+
+    if args and args[0] == "--none":
+        if os.path.exists(MARK):
+            os.remove(MARK)
+        print("active project cleared")
+        return
+    if args and args[0] == "--new":
+        if len(args) < 2:
+            sys.exit("usage: tr-project --new <name>")
+        create(args[1]); set_active(args[1]); return
+    if args:
+        set_active(args[0]); return
+
+    cur = active()
+    print(f"container: {P}")
+    print(f"active:    {cur or '(none set)'}")
+    print()
+    ps = projects()
+    if not ps:
+        print("no projects yet.  tr-project --new <name>")
+        return
+    for name in ps:
+        r = os.path.join(P, name)
+        ns = len([f for _, _, fs in os.walk(os.path.join(r, "source")) for f in fs])
+        nt = len([f for _, _, fs in os.walk(os.path.join(r, "translated")) for f in fs])
+        flag = "*" if name == cur else " "
+        print(f" {flag} {name:<28} {ns:>4} source  {nt:>4} translated")
+
+if __name__ == "__main__":
+    main()

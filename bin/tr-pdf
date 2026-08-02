@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# tr-pdf - OCR a scanned PDF, then translate the text into a .docx.
+#
+# Usage:  tr-pdf <input.pdf> <output.docx>
+#
+# Two-stage by design. The OCR text layer is written to work/ocr/ and is
+# meant to be VERIFIED BY A HUMAN before the translation stage runs. A model
+# fed corrupted OCR produces a fluent, confident, wrong translation.
+#
+#   tr-pdf --ocr-only in.pdf     # stage 1: OCR, then go read the text
+#   tr-pdf in.pdf out.docx       # both stages
+
+set -euo pipefail
+TR_ROOT="${TR_ROOT:-$HOME/translate}"
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OCRDIR="$TR_ROOT/work/ocr"
+LANGS="${TR_OCR_LANGS:-slv+eng}"
+mkdir -p "$OCRDIR"
+
+ONLY=0; [[ "${1:-}" == "--ocr-only" ]] && { ONLY=1; shift; }
+IN="$1"; OUT="${2:-}"
+base="$(basename "${IN%.*}")"
+pdf="$OCRDIR/$base.ocr.pdf"
+txt="$OCRDIR/$base.txt"
+
+if [[ ! -f "$pdf" ]]; then
+  echo "  OCR ($LANGS): $(basename "$IN")"
+  ocrmypdf -l "$LANGS" --rotate-pages --deskew --clean \
+           --output-type pdfa --quiet "$IN" "$pdf"
+else
+  echo "  OCR cached: $(basename "$pdf")"
+fi
+pdftotext -layout "$pdf" "$txt"
+
+wc_w=$(wc -w < "$txt")
+echo "  text layer: $txt  ($wc_w words)"
+
+if [[ $ONLY -eq 1 ]]; then
+  echo
+  echo "  VERIFY THIS TEXT AGAINST THE PAGE IMAGES BEFORE TRANSLATING."
+  echo "  Pay particular attention to: names, dates, case numbers, amounts,"
+  echo "  and the characters c/s/z with carons."
+  echo
+  echo "  then:  tr-pdf '$IN' '$OUT'"
+  exit 0
+fi
+
+[[ -n "$OUT" ]] || { echo "output path required" >&2; exit 1; }
+"$BIN/tr-txt" "$txt" "$OUT"

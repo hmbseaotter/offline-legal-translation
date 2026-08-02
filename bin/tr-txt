@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""tr-txt - translate a plain text file into a .docx deliverable.
+
+Usage:  tr-txt <input.txt> <output.docx> [--from sl] [--to en] [--bilingual]
+
+--bilingual emits source and target alternately, source in grey italic.
+Useful for the Phase 1 comparison, since the reviewer can check line by line
+without switching windows.
+"""
+import os, sys, argparse
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+import trlib
+import docx
+from docx.shared import Pt, RGBColor
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("inp"); ap.add_argument("out")
+    ap.add_argument("--from", dest="src", default=os.environ.get("TR_SRC", "sl"))
+    ap.add_argument("--to", dest="tgt", default=os.environ.get("TR_TGT", "en"))
+    ap.add_argument("--bilingual", action="store_true")
+    a = ap.parse_args()
+
+    raw = open(a.inp, encoding="utf-8", errors="replace").read()
+    blocks = [b.strip() for b in raw.split("\n\n") if b.strip()]
+    gloss = trlib.load_glossary()
+
+    doc = docx.Document()
+    st = doc.styles["Normal"]
+    st.font.name = "Calibri"; st.font.size = Pt(10.5)
+
+    units = []
+    for b in blocks:
+        units.extend(trlib.segment(b.replace("\n", " ")) or [b])
+    todo = [u for u in units if trlib.is_translatable(u)]
+    print(f"  {len(units)} segments, {len(todo)} translatable", file=sys.stderr)
+
+    n = 0
+    for u in units:
+        if trlib.is_translatable(u):
+            n += 1
+            out = trlib.ollama_translate(u, a.src, a.tgt, gloss)
+            trlib.progress(n, len(todo), u[:48])
+        else:
+            out = u
+        if a.bilingual:
+            p = doc.add_paragraph()
+            r = p.add_run(u)
+            r.italic = True; r.font.size = Pt(9)
+            r.font.color.rgb = RGBColor(0x7F, 0x7F, 0x7F)
+        doc.add_paragraph(out)
+
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    doc.save(a.out)
+    print(f"  -> {a.out}", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()

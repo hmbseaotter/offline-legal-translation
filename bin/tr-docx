@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""tr-docx - translate a .docx, preserving paragraph and table structure.
+
+Usage:  tr-docx <input.docx> <output.docx> [--from sl] [--to en]
+
+Structure preserved: paragraphs, styles, headings, lists, tables, sections.
+Structure NOT preserved: formatting that varies *within* a paragraph (a bold
+word mid-sentence). Paragraph-level formatting is kept; the paragraph's runs
+are collapsed into one. This is a deliberate trade -- see the manual, S6.3.
+"""
+import os, sys, argparse, copy
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+import trlib
+import docx
+from docx.text.paragraph import Paragraph
+
+def set_paragraph_text(par, text):
+    """Replace text, keeping the first run's character formatting."""
+    runs = par.runs
+    if not runs:
+        par.add_run(text)
+        return
+    runs[0].text = text
+    for r in runs[1:]:
+        r.text = ""
+
+def iter_paragraphs(doc):
+    """Body paragraphs plus every paragraph inside every table cell."""
+    for par in doc.paragraphs:
+        yield par
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            for cell in row.cells:
+                for par in cell.paragraphs:
+                    yield par
+    for sec in doc.sections:
+        for hf in (sec.header, sec.footer):
+            for par in hf.paragraphs:
+                yield par
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("inp"); ap.add_argument("out")
+    ap.add_argument("--from", dest="src", default=os.environ.get("TR_SRC", "sl"))
+    ap.add_argument("--to", dest="tgt", default=os.environ.get("TR_TGT", "en"))
+    a = ap.parse_args()
+
+    gloss = trlib.load_glossary()
+    doc = docx.Document(a.inp)
+
+    pars = [p for p in iter_paragraphs(doc) if p.text.strip()]
+    todo = [p for p in pars if trlib.is_translatable(p.text)]
+    print(f"  {os.path.basename(a.inp)}: {len(pars)} paragraphs, "
+          f"{len(todo)} translatable", file=sys.stderr)
+
+    for i, par in enumerate(todo, 1):
+        src = par.text.strip()
+        segs = trlib.segment(src)
+        if len(segs) <= 1:
+            out = trlib.ollama_translate(src, a.src, a.tgt, gloss)
+        else:
+            # Translate segment by segment so the TM keys on sentences.
+            # This is what makes the cache reusable across documents.
+            out = " ".join(
+                trlib.ollama_translate(s, a.src, a.tgt, gloss) for s in segs)
+        set_paragraph_text(par, out)
+        trlib.progress(i, len(todo), src[:48])
+
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    doc.save(a.out)
+    print(f"  -> {a.out}", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()

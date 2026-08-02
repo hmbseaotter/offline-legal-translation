@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""tr-fixtures - generate synthetic Slovene legal documents for development.
+
+Usage:  tr-fixtures [outdir]      default: ./fixtures
+
+These are invented. No real case data. Use them for every development and
+debugging session so that confidential material never needs to be opened
+while an assistant is attached to the terminal.
+
+The content deliberately exercises the hard cases:
+  - abbreviations that must not split sentences (št. čl. odst. d.o.o. g.)
+  - dates and case numbers that must pass through untranslated
+  - amounts with Slovene decimal separators
+  - diacritics č š ž
+  - a table with a high repeat ratio
+"""
+import os, sys, random
+
+# trlib re-execs under the venv interpreter, where the packages below live.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+import trlib  # noqa: F401  (imported for its side effect)
+
+try:
+    import docx, openpyxl
+    from docx.shared import Pt
+except ImportError:
+    sys.exit("dependencies missing. Run: tr-setup"
+             "  (installs python-docx and openpyxl into ${TR_VENV:-~/.translate-venv})")
+
+OUT = sys.argv[1] if len(sys.argv) > 1 else "fixtures"
+os.makedirs(OUT, exist_ok=True)
+random.seed(7)
+
+PARAS = [
+ "Obdolženi je bil obtožen po čl. 211 odst. 2 KZ-1, ker naj bi dne 5. 3. 2024 "
+ "protipravno odtujil premoženje v vrednosti 12.450,00 EUR.",
+ "Zaslišanje priče g. Novaka je bilo opravljeno dne 12. 4. 2024 pred "
+ "Okrožnim sodiščem v Ljubljani, zadeva št. I K 1234/2024.",
+ "Oškodovanec je v predkazenskem postopku podal izjavo, da je bil o "
+ "spornem poslu obveščen šele naknadno, kar potrjuje tudi listinska dokumentacija.",
+ "Družba PRIMER d.o.o., matična št. 1234567000, je vložila pritožbo zoper "
+ "sklep z dne 20. 5. 2024. Pritožba je bila zavrnjena kot neutemeljena.",
+ "Sodišče ugotavlja, da izvedeni dokazi ne zadostujejo za utemeljen sum, "
+ "zato se postopek v tem delu ustavi.",
+ "Skladno s čl. 6 odst. 1 EKČP ima vsakdo pravico do poštenega sojenja v "
+ "razumnem roku pred neodvisnim in nepristranskim sodiščem.",
+]
+HEADINGS = ["KAZENSKA OVADBA", "ZAPISNIK O ZASLIŠANJU", "SKLEP", "OBTOŽNICA"]
+
+def make_docx(path, heading, n):
+    d = docx.Document()
+    d.styles["Normal"].font.name = "Calibri"
+    d.styles["Normal"].font.size = Pt(10.5)
+    d.add_heading(heading, 1)
+    d.add_paragraph(f"Zadeva št. I K {random.randint(1000,9999)}/2024")
+    d.add_paragraph(f"Datum: {random.randint(1,28)}. {random.randint(1,12)}. 2024")
+    for i in range(n):
+        d.add_paragraph(PARAS[i % len(PARAS)])
+    t = d.add_table(rows=3, cols=2); t.style = "Table Grid"
+    for r, (k, v) in enumerate([("Datum", "5. 3. 2024"),
+                                ("Znesek", "12.450,00 EUR"),
+                                ("Opravilna št.", "I K 1234/2024")]):
+        t.cell(r, 0).text = k; t.cell(r, 1).text = v
+    d.save(path)
+    print(f"  {path}")
+
+def make_xlsx(path, rows):
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Dokazi"
+    ws.append(["Zap. št.", "Opis dokaza", "Status", "Vrsta", "Datum", "Znesek"])
+    opisi = ["Bančni izpisek", "Elektronsko sporočilo", "Pogodba o zaposlitvi",
+             "Zapisnik o zaslišanju", "Fotografija kraja dejanja", "Izvedensko mnenje"]
+    status = ["v obravnavi", "zavrnjeno", "sprejeto", "vrnjeno v dopolnitev"]
+    vrsta = ["listinski dokaz", "elektronski dokaz", "materialni dokaz"]
+    for i in range(1, rows + 1):
+        ws.append([i, random.choice(opisi), random.choice(status),
+                   random.choice(vrsta),
+                   f"{random.randint(1,28)}. {random.randint(1,12)}. 2024",
+                   round(random.uniform(100, 50000), 2)])
+    wb.save(path)
+    print(f"  {path}  ({rows} rows, high repeat ratio by design)")
+
+print("synthetic fixtures (invented content, no real case data):")
+for i, hd in enumerate(HEADINGS, 1):
+    make_docx(os.path.join(OUT, f"primer-{i:02d}.docx"), hd, 4 + i)
+make_xlsx(os.path.join(OUT, "dokazi-mala.xlsx"), 200)
+make_xlsx(os.path.join(OUT, "dokazi-velika.xlsx"), 7000)
+print("\nnext:  tr-xlsx", os.path.join(OUT, "dokazi-velika.xlsx"), "--survey")

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# case-guard - wrapper that refuses to launch Claude Code while the case
+# container is mounted.
+#
+# Install into a directory that PRECEDES the real binary in PATH, so this
+# wrapper shadows it without replacing it:
+#
+#   mkdir -p ~/.local/sbin
+#   cp case-guard ~/.local/sbin/claude
+#   chmod +x ~/.local/sbin/claude
+#   echo 'export PATH="$HOME/.local/sbin:$PATH"' >> ~/.bashrc
+#
+# Do NOT install over ~/.local/bin/claude. On this machine that path IS the
+# real launcher (a symlink into ~/.local/share/claude/versions/), and it is
+# the only claude in PATH -- none of the fallbacks probed below exist.
+# Overwriting it destroys the launcher, and this wrapper then exits 127
+# because it can no longer find a real binary to exec. Shadowing also
+# survives Claude Code self-updates, which rewrite that symlink.
+#
+# This is the piece that makes the boundary structural. Forgetting to close
+# the container no longer results in a silent exposure; it results in Claude
+# Code refusing to start.
+
+set -euo pipefail
+MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
+
+# Resolve the real binary, skipping this wrapper so we cannot recurse.
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+REAL=""
+IFS=: read -ra DIRS <<< "$PATH"
+for dir in "${DIRS[@]}"; do
+  cand="$dir/claude"
+  [[ -x "$cand" ]] || continue
+  [[ "$(readlink -f "$cand")" == "$SELF" ]] && continue
+  REAL="$cand"; break
+done
+for fallback in "$HOME/.local/share/claude/bin/claude" \
+                "/usr/local/bin/claude" "$HOME/.claude/local/claude"; do
+  [[ -n "$REAL" ]] && break
+  [[ -x "$fallback" && "$(readlink -f "$fallback")" != "$SELF" ]] && REAL="$fallback"
+done
+[[ -n "$REAL" ]] || { echo "cannot locate the real claude binary" >&2; exit 127; }
+
+if mountpoint -q "$MNT" 2>/dev/null; then
+  cat >&2 <<EOF
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  BLOCKED: the case container is mounted at $MNT
+  │
+  │  Claude Code sends context to Anthropic's servers. Case
+  │  material must not be reachable during a session.
+  │
+  │  Close it first:   case-close
+  │  Then start from the kit directory (outside ~/translation-work)
+  └──────────────────────────────────────────────────────────────┘
+
+EOF
+  exit 3
+fi
+
+# Second check: refuse if the data directory is unmounted but holds real
+# files anyway. Without this the guard is a no-op until case-init exists --
+# a plain directory full of case material passes the mountpoint test above.
+# Hidden entries (.directory and friends) are ignored so an empty scaffold
+# does not trip it.
+if [[ -d "$MNT" ]] && ! mountpoint -q "$MNT" 2>/dev/null; then
+  if [[ -n "$(find "$MNT" -type f -not -path '*/.*' -print -quit 2>/dev/null)" ]]; then
+    cat >&2 <<EOF
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  BLOCKED: $MNT holds files but is not a mount.
+  │
+  │  That means case material is sitting unencrypted outside the
+  │  container, and closing the container cannot hide it.
+  │
+  │  Create the container:  case-init 40G
+  │  Then move the material into it and remove the plain copies.
+  └──────────────────────────────────────────────────────────────┘
+
+EOF
+    exit 5
+  fi
+fi
+
+# Third check: refuse if started from inside or above the data directory,
+# even when unmounted, since the path could be mounted mid-session.
+cwd="$(pwd -P)"
+mntp="$(readlink -f "$MNT")"
+if [[ "$cwd" == "$mntp"* || "$mntp" == "$cwd"/* ]]; then
+  echo "BLOCKED: working directory $cwd contains or sits inside $mntp." >&2
+  echo "Start from the kit directory instead - anywhere outside" >&2
+  echo "$mntp and its parents." >&2
+  exit 4
+fi
+
+exec "$REAL" "$@"

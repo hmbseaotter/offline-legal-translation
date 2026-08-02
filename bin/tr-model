@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# tr-model - register the translation model under a stable short name.
+#
+# Wrapping the long Hugging Face tag in a local alias means the pipeline
+# refers to "gams3:q8" everywhere. Changing model later is one command here
+# rather than an edit in every script.
+#
+# It also pins num_ctx and temperature, so behaviour does not depend on
+# whatever defaults a future Ollama version ships.
+
+set -euo pipefail
+BASE="${1:-hf.co/mradermacher/GaMS3-12B-Instruct-GGUF:Q8_0}"
+NAME="${2:-gams3:q8}"
+CTX="${TR_NUM_CTX:-8192}"
+TMP="$(mktemp -d)"
+
+cat > "$TMP/Modelfile" <<EOF
+FROM $BASE
+PARAMETER num_ctx $CTX
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.05
+EOF
+
+echo "==> pulling $BASE (this is a large download; it happens once)"
+ollama pull "$BASE"
+
+echo "==> registering as $NAME (num_ctx=$CTX)"
+ollama create "$NAME" -f "$TMP/Modelfile"
+rm -rf "$TMP"
+
+echo
+ollama show "$NAME" | head -20
+echo
+echo "Set this in your shell (tr-setup adds it to ~/.bashrc):"
+echo "  export TR_MODEL=$NAME"

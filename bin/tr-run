@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# tr-run - translate everything in source/ that is not yet in translated/.
+#
+# Resumable: skips files already present in translated/, and within a file
+# every segment already in the translation memory is reused rather than
+# regenerated. Killing this mid-run and restarting loses at most one segment.
+#
+# Usage:  tr-run                 # translate everything missing
+#         tr-run -n              # dry run: list what would be done
+#         tr-run path/to/one.docx
+
+set -uo pipefail
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
+
+# Resolve the active project unless TR_ROOT was given explicitly.
+if [[ -z "${TR_ROOT:-}" ]]; then
+  [[ -d "$TR_PROJECTS" ]] || { echo "container not mounted: $TR_PROJECTS" >&2
+                               echo "run: case-open" >&2; exit 2; }
+  ACTIVE="$(cat "$TR_PROJECTS/.active" 2>/dev/null | tr -d '[:space:]')"
+  [[ -n "$ACTIVE" ]] || { echo "no active project. run: tr-project <name>" >&2; exit 2; }
+  TR_ROOT="$TR_PROJECTS/$ACTIVE"
+fi
+export TR_ROOT TR_PROJECTS
+PROJECT="$(basename "$TR_ROOT")"
+
+# Per-project settings (language pair, suffix, OCR languages).
+[[ -f "$TR_ROOT/project.conf" ]] && { set -a; . "$TR_ROOT/project.conf"; set +a; }
+
+SRC="$TR_ROOT/source"
+OUT="$TR_ROOT/translated"
+LOG="$TR_ROOT/logs/run-$(date +%Y%m%d-%H%M%S).log"
+SUFFIX="${TR_SUFFIX:-}"
+mkdir -p "$OUT" "$TR_ROOT/logs" "$TR_ROOT/work"
+
+DRY=0; [[ "${1:-}" == "-n" ]] && { DRY=1; shift; }
+
+target_for() {                       # relpath -> absolute output path
+  local rel="$1"
+  if [[ -n "$SUFFIX" ]]; then
+    local stem="${rel%.*}" ext="${rel##*.}"
+    printf '%s/%s%s.%s' "$OUT" "$stem" "$SUFFIX" "$ext"
+  else
+    printf '%s/%s' "$OUT" "$rel"
+  fi
+}
+
+if [[ $# -gt 0 ]]; then
+  mapfile -t FILES < <(for f in "$@"; do realpath --relative-to="$SRC" "$f"; done)
+else
+  mapfile -t FILES < <(cd "$SRC" && find . -type f ! -name '~$*' ! -name '.*' \
+                        -printf '%P\n' | sort)
+fi
+
+cat <<BANNER
+========================================================
+  PROJECT: $PROJECT
+  root:    $TR_ROOT
+  pair:    ${TR_SRC:-sl} -> ${TR_TGT:-en}
+  files:   ${#FILES[@]}
+  log:     $LOG
+========================================================
+BANNER
+# Writing into the wrong project is the failure mode this layout introduces.
+if [[ -t 0 && $DRY -eq 0 && ${#FILES[@]} -gt 0 ]]; then
+  read -r -p "Proceed with project '$PROJECT'? [y/N] " ans
+  [[ "$ans" == [yY]* ]] || { echo "aborted"; exit 0; }
+fi
+echo
+
+started=$(date +%s)
+done_n=0; skip_n=0; fail_n=0
+
+for rel in "${FILES[@]}"; do
+  [[ -z "$rel" ]] && continue
+  in="$SRC/$rel"
+  out="$(target_for "$rel")"
+  ext="${rel##*.}"; ext="${ext,,}"
+
+  if [[ -f "$out" && "$out" -nt "$in" ]]; then
+    echo "skip   $rel"; ((skip_n++)); continue
+  fi
+  if [[ $DRY -eq 1 ]]; then
+    echo "would  $rel  ($ext)"; continue
+  fi
+
+  mkdir -p "$(dirname "$out")"
+  echo "=== $rel" | tee -a "$LOG"
+  t0=$(date +%s)
+
+  case "$ext" in
+    docx) "$BIN/tr-docx" "$in" "$out" 2>&1 | tee -a "$LOG" ;;
+    xlsx) "$BIN/tr-xlsx" "$in" "$out" 2>&1 | tee -a "$LOG" ;;
+    pdf)  "$BIN/tr-pdf"  "$in" "${out%.pdf}.docx" 2>&1 | tee -a "$LOG" ;;
+    *)    echo "  unsupported extension: $ext (skipped)" | tee -a "$LOG"
+          ((skip_n++)); continue ;;
+  esac
+
+  if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
+    ((done_n++)); echo "  done in $(( $(date +%s) - t0 ))s" | tee -a "$LOG"
+  else
+    ((fail_n++)); echo "  FAILED" | tee -a "$LOG"
+  fi
+done
+
+echo
+echo "translated: $done_n   skipped: $skip_n   failed: $fail_n"
+echo "elapsed:    $(( ($(date +%s) - started) / 60 )) min"
+echo
+echo "next: tr-lint"

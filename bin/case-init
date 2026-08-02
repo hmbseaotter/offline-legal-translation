@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# case-init - create the encrypted case container. Run once.
+#
+# Usage:  case-init [size]        default 40G
+#
+# Creates a LUKS2 file container, formats it ext4, and prepares the
+# mountpoint. The container file is sparse, so it occupies only the space
+# actually used until it fills.
+
+set -euo pipefail
+SIZE="${1:-40G}"
+IMG="${CASE_IMG:-$HOME/.case/confidential.luks}"
+MAP="${CASE_MAP:-casedata}"
+MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
+
+command -v cryptsetup >/dev/null || {
+  echo "installing cryptsetup"; sudo apt update -qq && sudo apt install -y cryptsetup; }
+
+if [[ -e "$IMG" ]]; then
+  echo "container already exists: $IMG" >&2
+  echo "delete it deliberately if you really want to start over." >&2
+  exit 1
+fi
+
+if [[ -d "$MNT" && -n "$(ls -A "$MNT" 2>/dev/null)" ]]; then
+  echo "WARNING: $MNT already contains files." >&2
+  echo "Move them aside first; this script will not touch existing data." >&2
+  echo "  mv $MNT ${MNT}.plain" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$IMG")"
+chmod 700 "$(dirname "$IMG")"
+
+echo "==> creating $SIZE sparse container at $IMG"
+truncate -s "$SIZE" "$IMG"
+chmod 600 "$IMG"
+
+echo
+echo "==> LUKS2 format. Choose a strong passphrase you will not lose."
+echo "    There is no recovery. Put it in your password manager NOW."
+echo
+sudo cryptsetup luksFormat --type luks2 "$IMG"
+
+echo "==> opening and formatting ext4"
+sudo cryptsetup luksOpen "$IMG" "$MAP"
+sudo mkfs.ext4 -q -L casedata "/dev/mapper/$MAP"
+
+mkdir -p "$MNT"
+sudo mount "/dev/mapper/$MAP" "$MNT"
+sudo chown "$(id -u):$(id -g)" "$MNT"
+
+echo "==> creating shared layer inside the container"
+mkdir -p "$MNT/_shared/glossary" "$MNT/_shared/prompts"
+KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cp -n "$KIT/glossary/glossary.tsv"        "$MNT/_shared/glossary/base.tsv" 2>/dev/null || true
+cp -n "$KIT/glossary/nontranslatable.txt" "$MNT/_shared/glossary/"          2>/dev/null || true
+cp -n "$KIT/prompts/translate.txt"        "$MNT/_shared/prompts/"           2>/dev/null || true
+echo "    projects are created with: tr-project --new <name>"
+
+echo "==> adding a header key backup (guards against header corruption)"
+sudo cryptsetup luksHeaderBackup "$IMG" \
+     --header-backup-file "$HOME/.case/header.bak"
+sudo chown "$(id -u):$(id -g)" "$HOME/.case/header.bak"
+chmod 600 "$HOME/.case/header.bak"
+
+sudo umount "$MNT"
+sudo cryptsetup luksClose "$MAP"
+
+echo "==> making the bare mountpoint immutable"
+if sudo chattr +i "$MNT" 2>/dev/null; then
+  echo "    done - nothing can write to $MNT while the container is closed"
+else
+  echo "    NOTE: filesystem does not support the immutable flag."
+  echo "    Without it, a tool run while closed would silently write to the"
+  echo "    unencrypted mountpoint. Check case-status before batch runs."
+fi
+
+cat <<EOF
+
+Done.
+
+  container:  $IMG  ($SIZE, sparse)
+  header bak: $HOME/.case/header.bak
+  mountpoint: $MNT
+
+Store the passphrase in your password manager. There is no recovery.
+Copy $HOME/.case/header.bak somewhere off this machine; without it, a
+corrupted header means the data is gone even with the correct passphrase.
+
+Daily use:
+  case-open              unlock and mount
+  tr-project --new NAME  create a project
+  tr-project NAME        switch to it
+  case-status      is it open?
+  case-close       unmount and lock
+EOF

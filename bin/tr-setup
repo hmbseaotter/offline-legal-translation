@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# tr-setup - one-time provisioning. Safe to re-run.
+set -euo pipefail
+KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV="${TR_VENV:-$HOME/.translate-venv}"
+
+echo "==> project data lives in the encrypted container, created separately"
+echo "    container:  case-init"
+echo "    projects:   tr-project --new <name>"
+
+echo "==> system packages"
+sudo apt update -qq
+sudo apt install -y ocrmypdf poppler-utils \
+     tesseract-ocr tesseract-ocr-slv tesseract-ocr-eng tesseract-ocr-deu \
+     python3-pip python3-venv qpdf unpaper
+
+echo "==> python environment (outside the container, so it survives unmount)"
+python3 -m venv "$VENV"
+"$VENV/bin/pip" install -q --upgrade pip
+"$VENV/bin/pip" install -q python-docx openpyxl
+
+echo "==> swap check"
+sw=$(free -m | awk '/^Swap:/{print $2}')
+if [[ "$sw" -lt 4096 ]]; then
+  echo "    WARNING: swap is ${sw}MB. Long unattended runs want >=8GB as a"
+  echo "    safety net. See manual S2.3."
+else
+  echo "    swap ${sw}MB - ok"
+fi
+
+echo "==> config templates stay in the kit; case-init seeds _shared/ from them"
+
+echo "==> PATH"
+if ! grep -qF "$KIT/bin" "$HOME/.bashrc" 2>/dev/null; then
+  echo "export PATH=\"$KIT/bin:\$PATH\"" >> "$HOME/.bashrc"
+  echo "export TR_PROJECTS=\"\$HOME/translation-work/confidential-projects\"" >> "$HOME/.bashrc"
+  # ~/.local/sbin holds the case-guard wrapper and must precede ~/.local/bin,
+  # where the real claude launcher lives, for the shadowing to work.
+  echo "export PATH=\"\$HOME/.local/sbin:\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"
+  echo "    added to ~/.bashrc - run: source ~/.bashrc"
+fi
+
+echo
+echo "Done. Next:"
+echo "  1. tr-model              pull and register gams3:q8 (~13 GB)"
+echo "  2. case-init 40G         create the encrypted container"
+echo "  3. mkdir -p ~/.local/sbin && cp bin/case-guard ~/.local/sbin/claude"
+echo "     chmod +x ~/.local/sbin/claude            (the Claude Code guard)"
+echo "     NOT over ~/.local/bin/claude - that is the real launcher"
+echo "  4. case-open"
+echo "  5. tr-project --new <name>"
+echo "  6. copy files into the project's source/ then: tr-status"

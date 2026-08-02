@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# case-open - unlock and mount the encrypted case container.
+#
+# Usage:  case-open
+#
+# Refuses to run if a Claude Code session is active, because the point of
+# the container is that assistant sessions and case data are never both
+# present at once.
+
+set -euo pipefail
+IMG="${CASE_IMG:-$HOME/.case/confidential.luks}"
+MAP="${CASE_MAP:-casedata}"
+MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
+
+if [[ ! -f "$IMG" ]]; then
+  echo "container not found: $IMG" >&2
+  echo "run case-init first" >&2
+  exit 1
+fi
+
+if mountpoint -q "$MNT"; then
+  echo "already mounted at $MNT"
+  exit 0
+fi
+
+# Guard: do not open case data while an assistant session is running.
+if pgrep -x claude >/dev/null 2>&1; then
+  echo "REFUSING: a 'claude' process is running." >&2
+  echo "Case data and assistant sessions must not overlap. Exit Claude Code," >&2
+  echo "then run case-open again." >&2
+  exit 2
+fi
+
+# The bare mountpoint is immutable so nothing can write to it while the
+# container is closed. Lift that only for the duration of the mount.
+sudo chattr -i "$MNT" 2>/dev/null || true
+
+echo "unlocking $IMG"
+sudo cryptsetup luksOpen "$IMG" "$MAP"
+sudo mount "/dev/mapper/$MAP" "$MNT"
+sudo chown "$(id -u):$(id -g)" "$MNT"
+
+echo "mounted: $MNT"
+df -h "$MNT" | tail -1
+echo
+echo "Close it when finished:  case-close"

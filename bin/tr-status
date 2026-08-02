@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""tr-status - what is translated, what is missing, what is stale.
+
+Compares source/ against translated/ by filename. Filenames are preserved
+exactly, so the comparison is a plain set difference.
+
+Usage:  tr-status [--missing]      # --missing prints bare paths only
+"""
+import os, sys, time
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+import trlib
+
+SRC, TGT = trlib.path("source"), trlib.path("translated")
+SUFFIX = os.environ.get("TR_SUFFIX", "")     # e.g. "_translated"
+
+def target_name(rel):
+    if not SUFFIX:
+        return rel
+    stem, ext = os.path.splitext(rel)
+    return stem + SUFFIX + ext
+
+def walk(root):
+    out = set()
+    for dp, _, fns in os.walk(root):
+        for fn in fns:
+            if fn.startswith(("~$", ".")):
+                continue
+            out.add(os.path.relpath(os.path.join(dp, fn), root))
+    return out
+
+def main():
+    bare = "--missing" in sys.argv
+    if not os.path.isdir(SRC):
+        sys.exit(f"no source directory: {SRC}")
+    src = walk(SRC)
+    tgt = walk(TGT) if os.path.isdir(TGT) else set()
+
+    done, missing, stale = [], [], []
+    for rel in sorted(src):
+        t = target_name(rel)
+        tp, sp = os.path.join(TGT, t), os.path.join(SRC, rel)
+        if t not in tgt:
+            missing.append(rel)
+        elif os.path.getmtime(tp) < os.path.getmtime(sp):
+            stale.append(rel)
+        else:
+            done.append(rel)
+
+    if bare:
+        for r in missing:
+            print(os.path.join(SRC, r))
+        return
+
+    orphans = sorted(tgt - {target_name(r) for r in src})
+
+    print(f"project:    {trlib.project_name()}")
+    print(f"source:     {len(src)} files")
+    print(f"translated: {len(done)}")
+    print(f"missing:    {len(missing)}")
+    if stale:
+        print(f"stale:      {len(stale)}  (source newer than translation)")
+    if orphans:
+        print(f"orphaned:   {len(orphans)}  (in translated/, no matching source)")
+    print()
+    for label, items in (("MISSING", missing), ("STALE", stale), ("ORPHANED", orphans)):
+        if items:
+            print(f"{label}:")
+            for r in items:
+                print(f"  {r}")
+            print()
+    if done and "-v" in sys.argv:
+        print("DONE:")
+        for r in done:
+            print(f"  {r}")
+
+if __name__ == "__main__":
+    main()

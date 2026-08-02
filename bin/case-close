@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# case-close - unmount and lock the encrypted case container.
+#
+# Usage:  case-close [-f]
+#
+# Reports which processes still hold files open rather than failing with a
+# bare "target is busy". A long batch run is the usual culprit.
+
+set -uo pipefail
+MAP="${CASE_MAP:-casedata}"
+MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
+FORCE=0; [[ "${1:-}" == "-f" ]] && FORCE=1
+
+if ! mountpoint -q "$MNT"; then
+  echo "not mounted; nothing to do"
+  # still make sure the mapping is gone
+  sudo cryptsetup luksClose "$MAP" 2>/dev/null || true
+  exit 0
+fi
+
+busy="$(sudo lsof +D "$MNT" 2>/dev/null | tail -n +2)"
+if [[ -n "$busy" ]]; then
+  echo "Files are still open under $MNT:"
+  echo "$busy" | awk '{printf "  %-14s pid %-8s %s\n", $1, $2, $9}' | sort -u | head -20
+  echo
+  if [[ $FORCE -eq 0 ]]; then
+    echo "Finish or stop those processes, then run case-close again."
+    echo "To unmount anyway (risks data loss in a running batch): case-close -f"
+    exit 1
+  fi
+  echo "-f given: unmounting anyway."
+fi
+
+sync
+sudo umount "$MNT" || { echo "umount failed" >&2; exit 1; }
+sudo cryptsetup luksClose "$MAP"
+
+# Re-arm the immutable mountpoint so nothing writes to the bare directory.
+sudo chattr +i "$MNT" 2>/dev/null || \
+  echo "  note: could not set immutable flag on $MNT (filesystem may not support it)"
+
+echo "closed. $MNT is now empty and locked."

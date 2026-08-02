@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""tr-xlsx - translate a spreadsheet via unique-string deduplication.
+
+Usage:  tr-xlsx <input.xlsx> <output.xlsx> [--from sl] [--to en]
+                [--cols B,D,E]   restrict to these columns
+                [--survey]       report redundancy and exit, translating nothing
+
+Large tables are dominated by repeated categorical values. Each distinct
+string is translated once and written back by lookup, which collapses the
+work and guarantees identical cells get identical translations.
+"""
+import os, sys, argparse, collections
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+import trlib
+import openpyxl
+from openpyxl.utils import column_index_from_string
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("inp"); ap.add_argument("out", nargs="?")
+    ap.add_argument("--from", dest="src", default=os.environ.get("TR_SRC", "sl"))
+    ap.add_argument("--to", dest="tgt", default=os.environ.get("TR_TGT", "en"))
+    ap.add_argument("--cols", default=None)
+    ap.add_argument("--survey", action="store_true")
+    a = ap.parse_args()
+
+    cols = None
+    if a.cols:
+        cols = {column_index_from_string(c.strip().upper())
+                for c in a.cols.split(",")}
+
+    wb = openpyxl.load_workbook(a.inp)
+    targets, counter = [], collections.Counter()
+
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cols and cell.column not in cols:
+                    continue
+                if not isinstance(cell.value, str):
+                    continue
+                v = cell.value.strip()
+                if not trlib.is_translatable(v):
+                    continue
+                targets.append(cell)
+                counter[v] += 1
+
+    uniq = list(counter)
+    total = len(targets)
+    ratio = (len(uniq) / total) if total else 0
+    print(f"  text cells: {total:,}   unique: {len(uniq):,}   ratio: {ratio:.1%}",
+          file=sys.stderr)
+
+    if a.survey or not a.out:
+        print("\n  most repeated values:", file=sys.stderr)
+        for s, n in counter.most_common(20):
+            print(f"    {n:6,}  {s[:70]}", file=sys.stderr)
+        est = len(uniq) * 15 / 4 / 3600
+        print(f"\n  rough translation time at 4 tok/s: {est:.1f} h "
+              f"(vs {total*15/4/3600:.1f} h without dedup)", file=sys.stderr)
+        return
+
+    gloss = trlib.load_glossary()
+    mapping = {}
+    for i, s in enumerate(uniq, 1):
+        mapping[s] = trlib.ollama_translate(s, a.src, a.tgt, gloss)
+        trlib.progress(i, len(uniq), s[:48])
+
+    for cell in targets:
+        v = cell.value.strip()
+        if v in mapping:
+            cell.value = mapping[v]
+
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    wb.save(a.out)
+    print(f"  -> {a.out}", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()

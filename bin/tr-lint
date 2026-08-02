@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""tr-lint - deterministic checks over the translation memory and outputs.
+
+Usage:  tr-lint [--tsv report.tsv]
+
+Runs no model. Takes seconds. Catches the error classes a language model is
+structurally worst at noticing. The output is a prioritized worklist for the
+reviewer, not a pass/fail gate.
+
+Checks:
+  NUM   a number present in source is absent from target, or vice versa
+  GLOSS a glossary term's agreed translation was not used
+  NONTR a string marked non-translatable was altered
+  FAIL  a segment where translation errored out
+  EMPTY empty or whitespace-only target
+  ECHO  target identical to source (possible untranslated passthrough)
+  INCON the same source segment translated two different ways
+"""
+import os, re, sys, sqlite3, argparse, collections
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+import trlib
+
+NUM_RE = re.compile(r"\d[\d.,/\u2013-]*\d|\d")
+
+def norm_nums(s):
+    """Numbers with separators normalized, so 1.234,56 == 1,234.56."""
+    out = []
+    for m in NUM_RE.findall(s or ""):
+        d = re.sub(r"[^\d]", "", m)
+        if d:
+            out.append(d.lstrip("0") or "0")
+    return collections.Counter(out)
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tsv", default=trlib.path("work", "lint-report.tsv"))
+    a = ap.parse_args()
+
+    dbp = trlib.path("work", "tm.sqlite")
+    if not os.path.exists(dbp):
+        sys.exit("no translation memory yet - nothing to check")
+    db = sqlite3.connect(dbp)
+    rows = db.execute("SELECT src, tgt, direction FROM tm").fetchall()
+    db.close()
+
+    gloss = trlib.load_glossary()
+    findings = []
+    by_src = collections.defaultdict(set)
+
+    for src, tgt, direction in rows:
+        by_src[(src, direction)].add(tgt)
+
+        if tgt.startswith("[TRANSLATION FAILED]"):
+            findings.append(("FAIL", "translation errored", src, tgt)); continue
+        if not tgt.strip():
+            findings.append(("EMPTY", "empty target", src, tgt)); continue
+        if tgt.strip() == src.strip() and trlib.is_translatable(src):
+            findings.append(("ECHO", "target identical to source", src, tgt))
+
+        sn, tn = norm_nums(src), norm_nums(tgt)
+        lost = sn - tn
+        added = tn - sn
+        if lost:
+            findings.append(("NUM", "missing from target: " + ", ".join(sorted(lost)), src, tgt))
+        if added:
+            findings.append(("NUM", "not in source: " + ", ".join(sorted(added)), src, tgt))
+
+        low_s = src.lower()
+        for term, want in gloss:
+            if term.lower() in low_s and want.lower() not in tgt.lower():
+                findings.append(("GLOSS", f"'{term}' should render as '{want}'", src, tgt))
+
+        for pat in trlib.nontranslatables():
+            for m in pat.findall(src):
+                frag = m if isinstance(m, str) else m[0]
+                if frag and frag not in tgt:
+                    findings.append(("NONTR", f"'{frag}' altered or dropped", src, tgt))
+
+    for (src, direction), tgts in by_src.items():
+        if len(tgts) > 1:
+            findings.append(("INCON", f"{len(tgts)} different translations",
+                             src, " || ".join(sorted(tgts))))
+
+    counts = collections.Counter(f[0] for f in findings)
+    order = ["FAIL", "NUM", "NONTR", "INCON", "GLOSS", "ECHO", "EMPTY"]
+    findings.sort(key=lambda f: (order.index(f[0]) if f[0] in order else 99, f[2]))
+
+    os.makedirs(os.path.dirname(a.tsv), exist_ok=True)
+    with open(a.tsv, "w", encoding="utf-8") as fh:
+        fh.write("check\tdetail\tsource\ttarget\n")
+        for c, d, s, t in findings:
+            fh.write("\t".join(x.replace("\t", " ").replace("\n", " ")
+                               for x in (c, d, s, t)) + "\n")
+
+    print(f"segments checked: {len(rows):,}")
+    print(f"findings:         {len(findings):,}")
+    for k in order:
+        if counts.get(k):
+            print(f"  {k:6} {counts[k]:,}")
+    print(f"\nreport: {a.tsv}")
+    if findings:
+        print("\nfirst few:")
+        for c, d, s, t in findings[:8]:
+            print(f"  [{c}] {d}\n     src: {s[:80]}\n     tgt: {t[:80]}")
+
+if __name__ == "__main__":
+    main()

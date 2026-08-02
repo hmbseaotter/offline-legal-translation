@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "deny": [
+      "Read(//home/seaotter/translation-work/**)",
+      "Edit(//home/seaotter/translation-work/**)",
+      "Write(//home/seaotter/translation-work/**)",
+      "Bash(cat //home/seaotter/translation-work/**)",
+      "Bash(head //home/seaotter/translation-work/**)",
+      "Bash(tail //home/seaotter/translation-work/**)",
+      "Bash(less //home/seaotter/translation-work/**)",
+      "Bash(grep * //home/seaotter/translation-work/**)",
+      "Bash(pdftotext *)",
+      "Bash(tr-run *)",
+      "Bash(case-open *)",
+      "Bash(curl *)",
+      "Bash(scp *)",
+      "Bash(rsync *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Read(//home/seaotter/translation-work/confidential-projects/_shared/**)"
+    ],
+    "allow": [
+      "Bash(tr-fixtures *)",
+      "Bash(tr-status *)",
+      "Bash(python3 -m py_compile *)",
+      "Bash(bash -n *)"
+    ]
+  }
+}

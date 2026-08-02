@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# llm-hw-survey.sh — collect the hardware facts that determine which local
+# LLMs a machine can realistically run. Read-only; installs nothing.
+# Usage:  bash llm-hw-survey.sh            (prints to screen)
+#         bash llm-hw-survey.sh > out.txt  (saves to file)
+
+set -uo pipefail
+line() { printf '\n===== %s =====\n' "$1"; }
+
+line "COLLECTED"
+date -Is
+printf 'host: %s\n' "$(hostname)"
+
+line "OS / KERNEL"
+. /etc/os-release 2>/dev/null && printf 'distro: %s\n' "${PRETTY_NAME:-unknown}"
+printf 'kernel: %s\n' "$(uname -r)"
+printf 'arch:   %s\n' "$(uname -m)"
+
+line "CPU"
+lscpu | grep -E '^(Model name|Architecture|CPU\(s\)|Thread|Core|Socket|CPU max MHz|L3 cache)' 2>/dev/null
+printf 'instruction sets: '
+for f in avx avx2 avx512f avx_vnni amx_bf16 f16c; do
+  grep -qm1 " $f " /proc/cpuinfo && printf '%s ' "$f"
+done; echo
+
+line "MEMORY"
+free -h
+printf '\nswap detail:\n'; swapon --show 2>/dev/null | grep -q . && swapon --show || echo "  (no swap configured)"
+printf '\nDIMM slots (needs sudo; skip if it prompts):\n'
+sudo -n dmidecode -t memory 2>/dev/null \
+  | grep -E 'Size:|Type:|Speed:|Locator:' | grep -v 'No Module' || echo "  (run with sudo to see upgrade headroom)"
+
+line "GPU"
+command -v lspci >/dev/null && { lspci -nn | grep -Ei 'vga|3d|display' || echo "  none reported"; } || echo "  lspci missing — run: sudo apt install pciutils"
+printf '\nNVIDIA:\n'
+command -v nvidia-smi >/dev/null && nvidia-smi \
+  --query-gpu=name,memory.total,driver_version,compute_cap --format=csv \
+  || echo "  nvidia-smi not present"
+printf '\nVulkan/OpenCL compute runtimes:\n'
+command -v vulkaninfo >/dev/null && vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName' || echo "  vulkaninfo not present"
+command -v clinfo    >/dev/null && clinfo -l 2>/dev/null                                          || echo "  clinfo not present"
+
+line "DISK"
+df -h / /home "$HOME" 2>/dev/null | sort -u
+printf '\nfree in home: %s\n' "$(df -h --output=avail "$HOME" 2>/dev/null | tail -1 | tr -d ' ')"
+printf 'storage devices:\n'; lsblk -d -o NAME,SIZE,ROTA,MODEL 2>/dev/null
+
+line "THERMAL / POWER (sustained-load ceiling)"
+command -v sensors >/dev/null && sensors 2>/dev/null | grep -Ei 'package|core 0|tdie' || echo "  lm-sensors not installed (optional)"
+cat /sys/class/power_supply/BAT*/status 2>/dev/null | head -1
+
+line "EXISTING LLM TOOLING"
+for t in ollama llama-cli llama-server python3 docker podman; do
+  if command -v "$t" >/dev/null; then
+    printf '%-12s %s\n' "$t" "$(command -v "$t")"
+  else
+    printf '%-12s (not installed)\n' "$t"
+  fi
+done
+command -v ollama >/dev/null && { printf '\nollama models present:\n'; ollama list 2>/dev/null; }
+
+line "END"
