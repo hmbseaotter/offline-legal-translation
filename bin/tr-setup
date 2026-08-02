@@ -14,8 +14,18 @@ sudo apt update -qq
 # hold the mount open. Without it that report is silently empty and you get
 # a bare "target is busy" instead -- the exact failure case-close was
 # written to explain.
+#
+# The hunspell dictionaries are what tr-inventory detects source language
+# with -- not a spellchecker here, a word list. Without them triage cannot
+# run and every file in a mixed client drop would be treated as Slovene.
+#
+# tesseract-ocr-hrv and -srp-latn are for the sampling pass only: a scanned
+# PDF has no text to detect from, so tr-inventory OCRs a page or two with
+# the languages combined and decides from that before the real OCR runs.
 sudo apt install -y ocrmypdf poppler-utils \
      tesseract-ocr tesseract-ocr-slv tesseract-ocr-eng tesseract-ocr-deu \
+     tesseract-ocr-hrv tesseract-ocr-srp-latn \
+     hunspell-sl hunspell-hr hunspell-sr hunspell-hy hunspell-en-us \
      python3-pip python3-venv qpdf unpaper lsof
 
 echo "==> python environment (outside the container, so it survives unmount)"
@@ -70,4 +80,6 @@ echo "     chmod +x ~/.local/sbin/claude            (the Claude Code guard)"
 echo "     NOT over ~/.local/bin/claude - that is the real launcher"
 echo "  4. case-open"
 echo "  5. tr-project --new <name>"
-echo "  6. copy files into the project's source/ then: tr-status"
+echo "  6. copy the client drop into the project's source/ (keep its folders)"
+echo "  7. tr-inventory           classify every file by source language"
+echo "  8. tr-status / tr-run     operate on the matching files only"
