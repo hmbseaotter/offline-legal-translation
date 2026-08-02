@@ -65,7 +65,13 @@ if [[ ! -f "$pdf" ]]; then
 else
   echo "  OCR cached: $(basename "$pdf")"
 fi
-pdftotext -layout "$pdf" "$txt"
+# Not pdftotext. It reads the text layer ocrmypdf embedded and cannot tell a
+# word Tesseract was sure of from one it invented -- and the forms in this
+# corpus are hand-filled, where inventing is exactly what it does. tr-ocrtext
+# keeps the per-word confidence and marks what could not be read, so a
+# scrawled amount reaches the translator as [ILLEGIBLE] rather than as a
+# confident figure nobody has reason to doubt.
+"$BIN/tr-ocrtext" "$pdf" "$txt"
 
 wc_w=$(wc -w < "$txt")
 echo "  text layer: $txt  ($wc_w words)"

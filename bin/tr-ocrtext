@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""tr-ocrtext - OCR text layer with unreadable tokens marked [ILLEGIBLE].
+
+Usage:  tr-ocrtext <input.pdf> <output.txt>
+
+Called by tr-pdf in place of pdftotext. The difference is confidence:
+pdftotext reads the text layer ocrmypdf embedded and cannot tell a word
+Tesseract was certain of from one it guessed. This runs Tesseract directly,
+keeps the per-word confidence, and replaces anything below the floor with
+the translator's marker.
+
+WHY IT MATTERS ON THIS CORPUS
+
+Every source is a scan of prosecution evidence, and the forms in it are
+filled in by hand. Handwriting does not fail loudly: Tesseract emits
+plausible-looking words rather than nothing, the model translates them
+fluently, and a scrawled amount arrives in the deliverable as a confident
+figure with nothing marking it as invented. Marking it [ILLEGIBLE] turns a
+silent fabrication into a visible instruction to go and read the page.
+
+Measured on a page mixing print with one scrawled line: the scrawl scored
+0-32 and the print 85-92, so a floor at 40 separates them cleanly.
+
+WHAT THIS DOES NOT DO
+
+It does not catch a misread digit in clean print. The same test page carried
+a printed "12.450,00 EUR" that Tesseract read as 1248000 -- a wrong amount --
+at 86% confidence, well above any floor worth setting. Only a second engine
+reading the same page independently finds that; see tools/ocr-check.py.
+
+Runs of consecutive unreadable tokens collapse into one marker, because a
+hand-filled line would otherwise produce a dozen and bury the page.
+"""
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+MIN_CONF = float(os.environ.get("TR_OCR_MIN_CONF", "40"))
+LANGS = os.environ.get("TR_OCR_LANGS", "slv+eng")
+MARK = "[ILLEGIBLE]"
+
+
+def page_text(img):
+    """Reconstruct a page from Tesseract's TSV, marking what it could not read.
+
+    TSV carries block/paragraph/line numbers, so the line structure of the
+    original survives -- which matters for a form, where a value belongs to
+    the label on its line.
+    """
+    r = subprocess.run(["tesseract", img, "stdout", "-l", LANGS, "tsv"],
+                       capture_output=True, timeout=900)
+    lines, cur, key, marked, total = [], [], None, 0, 0
+
+    def flush():
+        """Emit one line, marking the whole of it when most was unreadable.
+
+        Scrawl does not fail token by token. Some strokes happen to score
+        above the floor and survive as noise -- "ma AA MM," out of a
+        hand-written line -- so marking only what fell below leaves a line
+        that reads as partly recovered when none of it was. Where most of a
+        line is unreadable the value is unreadable, and one marker says that
+        where a mixture of markers and debris does not.
+        """
+        if not cur:
+            return
+        bad = sum(1 for w in cur if w is None)
+        if bad and bad >= max(1, len(cur) // 2):
+            lines.append([MARK])
+        else:
+            out = []
+            for w in cur:
+                if w is None:
+                    if not out or out[-1] != MARK:
+                        out.append(MARK)   # collapse a run
+                else:
+                    out.append(w)
+            lines.append(out)
+
+    for ln in r.stdout.decode("utf-8", "replace").splitlines()[1:]:
+        c = ln.split("\t")
+        if len(c) < 12:
+            continue
+        word = c[11].strip()
+        try:
+            conf = float(c[10])
+        except ValueError:
+            continue
+        this = (c[2], c[3], c[4])           # block, paragraph, line
+        if key is not None and this != key:
+            flush()
+            cur = []
+        key = this
+        if not word:
+            continue
+        total += 1
+        if conf < MIN_CONF:
+            marked += 1
+            cur.append(None)
+        else:
+            cur.append(word)
+    flush()
+    return "\n".join(" ".join(w) for w in lines if w), marked, total
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("pdf")
+    ap.add_argument("out")
+    a = ap.parse_args()
+
+    if not shutil.which("tesseract") or not shutil.which("pdftoppm"):
+        # Fall back rather than fail: a text layer without confidence is
+        # still better than no text layer.
+        subprocess.run(["pdftotext", "-layout", a.pdf, a.out], check=False)
+        print("  (tesseract/pdftoppm missing - no confidence marking)",
+              file=sys.stderr)
+        return
+
+    tmp = tempfile.mkdtemp(prefix="trocr-")
+    try:
+        subprocess.run(["pdftoppm", "-png", "-r", "200", a.pdf,
+                        os.path.join(tmp, "pg")],
+                       capture_output=True, timeout=3600)
+        imgs = sorted(f for f in os.listdir(tmp) if f.endswith(".png"))
+        if not imgs:
+            subprocess.run(["pdftotext", "-layout", a.pdf, a.out], check=False)
+            return
+        out, marked, total = [], 0, 0
+        for img in imgs:
+            t, m, n = page_text(os.path.join(tmp, img))
+            out.append(t)
+            marked += m
+            total += n
+        with open(a.out, "w", encoding="utf-8") as fh:
+            fh.write("\n\n".join(out) + "\n")
+        if marked:
+            pct = 100.0 * marked / total if total else 0
+            print(f"  {marked} of {total} tokens unreadable ({pct:.0f}%), "
+                  f"marked {MARK}", file=sys.stderr)
+            if pct >= 20:
+                print(f"  a fifth of this document could not be read - "
+                      f"hand-filled fields need a person", file=sys.stderr)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()
