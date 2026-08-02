@@ -133,6 +133,14 @@ Do not change these without discussing with the operator first.
 4. **Abbreviations must not split sentences.** `ABBREV` in `lib/trlib.py`
    holds the Slovene legal list (`št.` `čl.` `odst.` `d.o.o.` …). Adding
    entries is expected; removing them breaks review ergonomics.
+   Slovene spaces its abbreviations as often as not, so `_SPACED_ABBR_RE`
+   covers `d. o. o.`, `s. p.`, `t. i.`, `l. r.` — without it a company
+   suffix split one sentence into four segments, three of them a single
+   letter, each becoming a reviewer unit and a memory entry.
+   **Open question:** a colon is a boundary, so `Datum: 5. 7. 2024` becomes
+   `Datum:` plus the date — a six-character segment. Defensible for labels,
+   wasteful as a unit of review. Left as it is because changing boundary
+   behaviour affects every segment in the corpus and would need re-measuring.
 5. **Non-translatables pass through verbatim** — case numbers, file numbers,
    statute short forms, identifiers. Patterns in `glossary/nontranslatable.txt`.
    **Dates, amounts and times are not in this class.** They are *converted*

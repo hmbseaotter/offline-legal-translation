@@ -226,6 +226,11 @@ ABBREV = [
     "g", "ga", "dr", "mag", "univ", "prof", "inž", "ing",
     "d.o.o", "d.d", "d.n.o", "k.d", "s.p", "z.o.o",
     "r.š", "e.š", "davč", "mat", "reg",
+    # Court actors and document furniture. odv. and izv. appear in almost
+    # every criminal file; zap. is the "Zap. št." column heading the fixture
+    # spreadsheet already uses.
+    "odv", "izv", "zap", "sod", "tož", "obd", "ovad", "pooblašč",
+    "pril", "vlož", "fasc", "tel", "faks", "sob", "nasl", "obr",
     # English legal
     "no", "art", "sec", "para", "pp", "cf", "eg", "ie", "etc", "vs", "v",
     "mr", "mrs", "ms", "jr", "sr", "inc", "ltd", "co", "corp",
@@ -237,6 +242,19 @@ _ABBR_RE = re.compile(
     re.IGNORECASE)
 _ROMAN_RE = re.compile(r"\b[IVXLCDM]+\.$")
 _INITIAL_RE = re.compile(r"\b[A-ZČŠŽÄÖÜ]\.$")
+
+# Slovene spaces its abbreviations more often than not: "d. o. o." rather
+# than "d.o.o.", and likewise "s. p.", "t. i.", "l. r.". ABBREV held only the
+# unspaced forms, so the spaced ones shattered a sentence one letter at a
+# time -- "Družba PRIMER d. o. o. je vložila pritožbo" came out as four
+# segments, three of them a single letter. A company suffix appears in
+# nearly every corporate document, so this was not an edge case; each
+# fragment became a reviewer unit and a memory entry, against invariant 3.
+#
+# Lowercase only. A capital letter before a period is an initial in a name,
+# which _INITIAL_RE already holds, and treating "J." the same way here would
+# be redundant.
+_SPACED_ABBR_RE = re.compile(r"(?:\b[a-zčšžćđ]\.\s+)*\b[a-zčšžćđ]\.$")
 # 1-3 digits: list numbering or a day/month in a date -> not a boundary.
 # 4 digits: almost always a year ending the sentence -> is a boundary.
 _NUMBERED_RE = re.compile(r"(?:^|\s)\d{1,3}(?:\.\d{1,3})*\.$")
@@ -258,7 +276,8 @@ def segment(text):
         buf = (buf + " " + chunk).strip() if buf else chunk
         tail = buf.rstrip()
         if (_ABBR_RE.search(tail) or _ROMAN_RE.search(tail)
-                or _INITIAL_RE.search(tail) or _NUMBERED_RE.search(tail)):
+                or _INITIAL_RE.search(tail) or _NUMBERED_RE.search(tail)
+                or _SPACED_ABBR_RE.search(tail)):
             continue                      # false boundary: keep accumulating
         if tail.endswith((".", "!", "?", ":", ";")) or len(tail) > 400:
             parts.append(tail)
