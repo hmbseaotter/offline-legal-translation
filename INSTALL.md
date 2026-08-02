@@ -39,8 +39,15 @@ The `claude` guard refuses to start a session from anywhere inside or above
 elsewhere. Placing it under `Claude_Stuff/cli_projects/` also keeps all
 Claude Code CLI work in one area.
 
-Nothing here hardcodes its own location — every script derives it at run time —
-so this directory can be renamed or moved without edits.
+No script hardcodes its own location; each derives it at run time, and
+`core.hooksPath` is relative, so both travel with the directory. Two lines in
+`~/.bashrc` do not: the `export KIT=` and the `$KIT/bin` PATH entry that
+`tr-setup` wrote with the old absolute path. Re-running `tr-setup` after a
+move appends the new PATH line but leaves the stale one behind, so edit
+`~/.bashrc` by hand.
+
+(The paths in `.claude/settings.json` point at the *data*, not at the kit, so
+a move does not affect them. They do need the username adjusted — see above.)
 
 ## Contents
 
