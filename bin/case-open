@@ -23,11 +23,43 @@ if mountpoint -q "$MNT"; then
   exit 0
 fi
 
-# Guard: do not open case data while an assistant session is running.
+# Guard: do not open case data while an assistant session is running. This is
+# the half of the mutual exclusion that faces this direction; case-guard
+# refuses to start Claude Code while the container is mounted. Neither alone
+# is enough -- without both you would simply do them in the other order.
+#
+# The message names the processes because "exit Claude Code" is not always
+# actionable advice: the desktop application runs Claude Code as a child
+# process literally named `claude`, so closing a conversation may leave it
+# alive, and the operator is left guessing what is still holding the lock.
 if pgrep -x claude >/dev/null 2>&1; then
-  echo "REFUSING: a 'claude' process is running." >&2
-  echo "Case data and assistant sessions must not overlap. Exit Claude Code," >&2
-  echo "then run case-open again." >&2
+  {
+    echo
+    echo "  ┌──────────────────────────────────────────────────────────────┐"
+    echo "  │  BLOCKED: a Claude session is still running."
+    echo "  │"
+    echo "  │  ALL Claude sessions must be closed before the container can"
+    echo "  │  be opened. Case material and assistant sessions are never"
+    echo "  │  both present at once -- that is the whole point of the"
+    echo "  │  container, and this check is what enforces it."
+    echo "  │"
+    echo "  │  Closing the conversation is often NOT enough: the desktop"
+    echo "  │  application keeps a 'claude' child process alive. Quit the"
+    echo "  │  application itself, and close any terminal or IDE window"
+    echo "  │  with a session attached."
+    echo "  │"
+    echo "  │  Still holding it open:"
+    for pid in $(pgrep -x claude); do
+      parent=$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)
+      pname=$(cat "/proc/$parent/comm" 2>/dev/null || echo "?")
+      printf '  │    pid %-7s (started by %s)\n' "$pid" "$pname"
+    done
+    echo "  │"
+    echo "  │  Confirm it is clear, then run case-open again:"
+    echo "  │      pgrep -x claude || echo clear"
+    echo "  └──────────────────────────────────────────────────────────────┘"
+    echo
+  } >&2
   exit 2
 fi
 
