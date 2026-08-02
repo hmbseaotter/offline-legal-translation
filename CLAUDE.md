@@ -101,6 +101,7 @@ flattens the tree.
 | `tr-model` | Register the GGUF with Ollama as `gams3:q8` |
 | `tr-fixtures [dir]` | Generate synthetic test documents, including a mixed-language drop |
 | `tr-inventory` | Classify every file in `source/` by source language. Run this before anything else |
+| `tr-inventory --count [--with-ocr]` | Words and segments per file, to size the job before starting. Scanned PDFs need `--with-ocr` |
 | `tr-status` | Diff `source/` against `translated/` |
 | `tr-run [-n] [--all] [file]` | Batch translate; resumable. Without `--all`, only what the inventory matched |
 | `tr-docx` / `tr-xlsx` / `tr-pdf` / `tr-txt` | Per-format workers |

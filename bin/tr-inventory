@@ -2,6 +2,19 @@
 """tr-inventory - inventory every file in source/ and detect its language.
 
 Usage:  tr-inventory [--rescan] [--no-ocr] [--limit N]
+        tr-inventory --count [--with-ocr]
+
+--count reads every file in full instead of sampling, and reports words and
+segments per file so the volume of work can be judged before any of it
+starts. Two units, because there are two questions: the translator is quoted
+in words, while machine time is governed by segments -- and only the ones the
+memory has not already seen, which on a table-heavy drop is a fraction of
+them. Words alone would answer neither question honestly.
+
+Scanned PDFs are the expensive part, so --count does not OCR them: it counts
+what has a text layer, reuses anything tr-pdf has already OCR'd, and lists
+the rest with a page count. --with-ocr runs the real pass and caches it where
+tr-pdf will find it, so the work is done once.
 
 Client drops arrive as nested folder trees mixing Slovene with English,
 Croatian/Serbian, Armenian and whatever else. This walks source/ in full,
@@ -32,6 +45,11 @@ import trlib
 import trlang
 
 SAMPLE_WORDS = 400          # enough to decide; no reason to read whole files
+
+# Measured on this machine with gams3:q8 over 12 samples of real pipeline
+# traffic. Duplicated from bin/tr-xlsx deliberately -- it is a measurement,
+# and if it is re-measured both must move together.
+SEC_PER_SEGMENT = 48.3
 OCR_SAMPLE_LANGS = os.environ.get("TR_OCR_SAMPLE_LANGS", "slv+hrv+eng")
 
 TEXT_EXT  = {".txt", ".md", ".csv", ".tsv", ".log"}
@@ -41,30 +59,35 @@ OPAQUE_EXT = {".doc", ".odt", ".rtf", ".ods", ".ppt", ".pptx", ".odp",
               ".zip", ".rar", ".7z", ".msg", ".eml", ".mp3", ".mp4", ".wav"}
 
 
-def _cap(words):
-    return " ".join(words[:SAMPLE_WORDS])
+def _cap(words, limit):
+    """limit None means take everything -- counting, rather than sampling."""
+    return " ".join(words if limit is None else words[:limit])
 
 
-def from_docx(path):
+def _enough(out, limit):
+    return limit is not None and len(out) >= limit
+
+
+def from_docx(path, limit=SAMPLE_WORDS):
     import docx
     d = docx.Document(path)
     out = []
     for p in d.paragraphs:
         if p.text.strip():
             out.extend(p.text.split())
-        if len(out) >= SAMPLE_WORDS:
-            return _cap(out), "docx"
+        if _enough(out, limit):
+            return _cap(out, limit), "docx"
     for t in d.tables:
         for r in t.rows:
             for c in r.cells:
                 if c.text.strip():
                     out.extend(c.text.split())
-            if len(out) >= SAMPLE_WORDS:
-                return _cap(out), "docx"
-    return _cap(out), "docx"
+            if _enough(out, limit):
+                return _cap(out, limit), "docx"
+    return _cap(out, limit), "docx"
 
 
-def from_xlsx(path):
+def from_xlsx(path, limit=SAMPLE_WORDS):
     import openpyxl
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     out = []
@@ -73,34 +96,85 @@ def from_xlsx(path):
             for v in row:
                 if isinstance(v, str) and v.strip():
                     out.extend(v.split())
-            if len(out) >= SAMPLE_WORDS:
+            if _enough(out, limit):
                 wb.close()
-                return _cap(out), "xlsx"
+                return _cap(out, limit), "xlsx"
     wb.close()
-    return _cap(out), "xlsx"
+    return _cap(out, limit), "xlsx"
 
 
-def from_text(path):
+def from_text(path, limit=SAMPLE_WORDS):
     with open(path, encoding="utf-8", errors="replace") as fh:
-        return _cap(fh.read(200_000).split()), "text"
+        raw = fh.read() if limit is None else fh.read(200_000)
+    return _cap(raw.split(), limit), "text"
 
 
-def from_pdf(path, allow_ocr=True):
-    """Text layer if there is one; otherwise OCR a couple of pages.
+def _ocr_cache(path):
+    """Where tr-pdf keeps the OCR text layer for this file, if it has one.
+
+    Same naming as tr-pdf so the expensive pass is done once and shared. Note
+    that tr-pdf keys on the basename alone, so two exhibits with the same
+    filename in different drops share a cache entry -- a real hazard given
+    drops arrive nested and filenames are preserved. Read-only here, and
+    flagged rather than worked around.
+    """
+    try:
+        root = trlib.ROOT
+        if not root:
+            return None
+        base = os.path.splitext(os.path.basename(path))[0]
+        cached = os.path.join(root, "work", "ocr", base + ".txt")
+        return cached if os.path.exists(cached) else None
+    except Exception:
+        return None
+
+
+def _pdf_pages(path):
+    try:
+        r = subprocess.run(["pdfinfo", path], capture_output=True, timeout=60)
+        for ln in r.stdout.decode("utf-8", "replace").splitlines():
+            if ln.startswith("Pages:"):
+                return int(ln.split()[1])
+    except Exception:
+        pass
+    return 0
+
+
+def from_pdf(path, allow_ocr=True, limit=SAMPLE_WORDS, full_ocr=False):
+    """Text layer if there is one; otherwise OCR.
 
     A scanned PDF has no text to detect a language from, and ocrmypdf needs
     to be told a language before it can make any. Sampling two pages with a
     combined language set breaks that circle: detect from the sample, then
     the real OCR pass can be told the right language instead of guessing.
+
+    Counting is a different job from detecting. It needs the whole document,
+    so it reads every page rather than the first five, and prefers the OCR
+    text layer tr-pdf has already cached. Where no cache exists and the file
+    is scanned, it reports pdf-needs-ocr with a page count rather than
+    quietly returning a count based on nothing -- unless full_ocr was asked
+    for, in which case it runs the real pass and caches it for tr-pdf.
     """
+    cached = _ocr_cache(path) if limit is None else None
+    if cached:
+        with open(cached, encoding="utf-8", errors="replace") as fh:
+            return _cap(fh.read().split(), limit), "pdf-ocr-cached"
+
+    args = ["pdftotext", "-layout", path, "-"]
+    if limit is not None:
+        args[1:1] = ["-l", "5"]
     try:
-        r = subprocess.run(["pdftotext", "-l", "5", "-layout", path, "-"],
-                           capture_output=True, timeout=120)
+        r = subprocess.run(args, capture_output=True, timeout=300)
         words = r.stdout.decode("utf-8", "replace").split()
     except Exception:
         words = []
     if len(words) >= trlang.MIN_TOKENS:
-        return _cap(words), "pdf-text"
+        return _cap(words, limit), "pdf-text"
+
+    if limit is None and not full_ocr:
+        return "", f"pdf-needs-ocr ({_pdf_pages(path)} pages)"
+    if limit is None and full_ocr:
+        return _full_ocr(path, limit)
     if not allow_ocr:
         return "", "pdf-needs-ocr"
     if not (shutil.which("pdftoppm") and shutil.which("tesseract")):
@@ -117,25 +191,50 @@ def from_pdf(path, allow_ocr=True):
                  "-l", OCR_SAMPLE_LANGS],
                 capture_output=True, timeout=180)
             got.extend(r.stdout.decode("utf-8", "replace").split())
-            if len(got) >= SAMPLE_WORDS:
+            if _enough(got, SAMPLE_WORDS):
                 break
-        return _cap(got), "pdf-ocr-sample"
+        return _cap(got, limit), "pdf-ocr-sample"
     except Exception:
         return "", "pdf-needs-ocr"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def extract(path, ext, allow_ocr):
+def _full_ocr(path, limit):
+    """Real OCR pass, cached where tr-pdf will find it."""
+    root = trlib.ROOT
+    if not root or not shutil.which("ocrmypdf"):
+        return "", "pdf-needs-ocr (ocrmypdf missing)"
+    ocrdir = os.path.join(root, "work", "ocr")
+    os.makedirs(ocrdir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(path))[0]
+    out_pdf = os.path.join(ocrdir, base + ".ocr.pdf")
+    out_txt = os.path.join(ocrdir, base + ".txt")
+    langs = os.environ.get("TR_OCR_LANGS", "slv+eng")
+    try:
+        if not os.path.exists(out_pdf):
+            subprocess.run(["ocrmypdf", "-l", langs, "--rotate-pages",
+                            "--deskew", "--clean", "--output-type", "pdfa",
+                            "--quiet", path, out_pdf],
+                           capture_output=True, timeout=3600, check=True)
+        subprocess.run(["pdftotext", "-layout", out_pdf, out_txt],
+                       capture_output=True, timeout=300, check=True)
+        with open(out_txt, encoding="utf-8", errors="replace") as fh:
+            return _cap(fh.read().split(), limit), "pdf-ocr-full"
+    except Exception as e:
+        return "", f"pdf-ocr-failed: {type(e).__name__}"
+
+
+def extract(path, ext, allow_ocr, limit=SAMPLE_WORDS, full_ocr=False):
     try:
         if ext == ".docx":
-            return from_docx(path)
+            return from_docx(path, limit)
         if ext == ".xlsx":
-            return from_xlsx(path)
+            return from_xlsx(path, limit)
         if ext in TEXT_EXT:
-            return from_text(path)
+            return from_text(path, limit)
         if ext == ".pdf":
-            return from_pdf(path, allow_ocr)
+            return from_pdf(path, allow_ocr, limit, full_ocr)
         if ext in OPAQUE_EXT:
             return "", "no-extractor"
     except Exception as e:
@@ -150,7 +249,17 @@ def main():
     ap.add_argument("--no-ocr", action="store_true",
                     help="do not sample-OCR scanned PDFs; mark them instead")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--count", action="store_true",
+                    help="read every file in full and count words and "
+                         "segments, for estimating the volume of work")
+    ap.add_argument("--with-ocr", action="store_true",
+                    help="with --count, run the real OCR pass on scanned PDFs "
+                         "instead of listing them as needing it. Slow, and "
+                         "cached so tr-pdf does not repeat it")
     a = ap.parse_args()
+    if a.with_ocr and not a.count:
+        ap.error("--with-ocr only means anything with --count")
+    limit = None if a.count else SAMPLE_WORDS
 
     # Resolve the project first: "the container is not mounted" must be the
     # message you get when the container is not mounted, not a complaint
@@ -194,21 +303,37 @@ def main():
         old = prior.get(rel)
         # A deferred row matches on size and mtime like any other, so without
         # this it would be "reused" forever and never actually examined.
+        # A row counted earlier is reusable; one that was only sampled is not,
+        # when counting is what was asked for.
+        counted = old.get("words", "") not in ("", "-") if old else False
         if old and old.get("method") != "not-yet-examined" \
                 and old.get("bytes") == str(st.st_size) \
-                and old.get("mtime") == f"{st.st_mtime:.0f}":
+                and old.get("mtime") == f"{st.st_mtime:.0f}" \
+                and (counted or not a.count):
             rows.append(old); reused += 1
         else:
             ext = os.path.splitext(rel)[1].lower()
-            text, method = extract(full, ext, allow_ocr=not a.no_ocr)
+            text, method = extract(full, ext, allow_ocr=not a.no_ocr,
+                                   limit=limit, full_ocr=a.with_ocr)
             if text:
                 lang, conf, note = det.detect(text)
             else:
                 lang, conf, note = "unknown", 0.0, method
-            rows.append({"path": rel, "ext": ext, "bytes": str(st.st_size),
-                         "mtime": f"{st.st_mtime:.0f}", "lang": lang,
-                         "confidence": f"{conf:.2f}", "method": method,
-                         "note": note})
+            row = {"path": rel, "ext": ext, "bytes": str(st.st_size),
+                   "mtime": f"{st.st_mtime:.0f}", "lang": lang,
+                   "confidence": f"{conf:.2f}", "method": method,
+                   "note": note, "words": "-", "segments": "-"}
+            if a.count and text:
+                row["words"] = str(len(text.split()))
+                row["segments"] = str(len(trlib.segment(text)))
+                if ext in (".xlsx", ".csv", ".tsv"):
+                    # A spreadsheet has cells, not prose. Counting its words
+                    # invites a quote based on a number that means nothing;
+                    # what governs the work there is unique strings, which
+                    # tr-xlsx --survey reports.
+                    row["note"] = (row["note"] + "; " if row["note"] else "") + \
+                        "tabular - see tr-xlsx --survey for unique strings"
+            rows.append(row)
         sys.stderr.write(f"\r  {i}/{len(files)} ")
         sys.stderr.flush()
     sys.stderr.write("\n")
@@ -233,7 +358,8 @@ def main():
                      "note": "deferred by --limit; re-run without it"})
     rows.sort(key=lambda r: r["path"])
 
-    cols = ["path", "ext", "bytes", "mtime", "lang", "confidence", "method", "note"]
+    cols = ["path", "ext", "bytes", "mtime", "lang", "confidence", "method",
+            "words", "segments", "note"]
     with open(manifest, "w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, delimiter="\t",
                            extrasaction="ignore")
@@ -268,6 +394,49 @@ def main():
     for lang, n in counts.most_common():
         mark = "  <- to translate" if lang == trlang.TARGET else ""
         lines.append(f"  {trlang.LABEL.get(lang, lang):<20} {n:>6}{mark}")
+    if a.count:
+        # Volume, which is two different questions with two different units.
+        #
+        # The translator is owed words; that is how the work is quoted. The
+        # machine is owed segments, and only the ones it has not seen before:
+        # the memory collapses repeats, and on the fixture spreadsheet that
+        # was 21,006 cells down to 19 distinct strings. Reporting words alone
+        # would have predicted days of machine time for seconds of work.
+        tgt = [r for r in examined if r["lang"] == trlang.TARGET]
+        def total(rs, k):
+            return sum(int(r[k]) for r in rs if r.get(k, "-").isdigit())
+        words, segs = total(tgt, "words"), total(tgt, "segments")
+        needs = [r for r in examined if "needs-ocr" in r.get("method", "")]
+        lines.append("")
+        lines.append(f"Volume, {trlang.LABEL[trlang.TARGET]} only "
+                     f"({len(tgt)} file(s)):")
+        lines.append(f"  words                {words:>9,}")
+        lines.append(f"  segments             {segs:>9,}")
+        if segs:
+            secs = segs * SEC_PER_SEGMENT
+            if secs < 3600:
+                span = f"{secs / 60:,.0f} min"
+            elif secs < 86400:
+                span = f"{secs / 3600:,.1f} h"
+            else:
+                span = f"{secs / 3600:,.0f} h  ({secs / 86400:,.1f} days)"
+            lines.append(f"  machine time         ~{span}")
+            lines.append(f"       at {SEC_PER_SEGMENT:.0f}s/segment, measured, "
+                         f"and before the memory collapses repeats")
+        allw = total(examined, "words")
+        if allw != words:
+            lines.append(f"  (all languages       {allw:>9,} words)")
+        if needs:
+            lines.append("")
+            lines.append(f"  {len(needs)} scanned PDF(s) not counted - no text "
+                         f"layer. Re-run with --with-ocr to include them.")
+            for r in needs[:5]:
+                lines.append(f"    {r['method']}")
+        lines.append("")
+        lines.append("  Word counts from OCR are approximate. Spreadsheets are "
+                     "cells rather than")
+        lines.append("  prose - use tr-xlsx --survey for the number that "
+                     "governs work there.")
     lines.append("")
     lines.append("By file format:")
     for ext, n in fmts.most_common():
