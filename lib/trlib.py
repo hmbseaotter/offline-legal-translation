@@ -45,10 +45,19 @@ PROJECTS = os.environ.get(
     os.path.expanduser("~/translation-work/confidential-projects"))
 SHARED = os.path.join(PROJECTS, "_shared")
 
-# An explicit TR_PROJECTS is a deliberate act -- fixtures, a mock-server run,
-# a throwaway root. The mount requirement below applies only to the real
-# container path, so those workflows keep working.
-PROJECTS_OVERRIDDEN = "TR_PROJECTS" in os.environ
+DEFAULT_PROJECTS = os.path.expanduser("~/translation-work/confidential-projects")
+
+# Pointing TR_PROJECTS somewhere ELSE is the deliberate act -- fixtures, a
+# mock-server run, a throwaway root -- and that is what lifts the mount
+# requirement below.
+#
+# Deliberately not `"TR_PROJECTS" in os.environ`. tr-setup exports the
+# variable to its own default value in ~/.bashrc, which changes nothing
+# functionally but made the variable *set* in every interactive shell -- so
+# the escape hatch stood permanently open on the real container and every
+# tool would have written plaintext onto an unmounted mountpoint without a
+# word. What matters is where the path points, not whether it was named.
+PROJECTS_OVERRIDDEN = os.path.realpath(PROJECTS) != os.path.realpath(DEFAULT_PROJECTS)
 
 def _under(child, parent):
     p = os.path.realpath(parent)

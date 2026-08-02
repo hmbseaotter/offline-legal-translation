@@ -49,7 +49,11 @@ echo "==> config templates stay in the kit; case-init seeds _shared/ from them"
 echo "==> PATH"
 if ! grep -qF "$KIT/bin" "$HOME/.bashrc" 2>/dev/null; then
   echo "export PATH=\"$KIT/bin:\$PATH\"" >> "$HOME/.bashrc"
-  echo "export TR_PROJECTS=\"\$HOME/translation-work/confidential-projects\"" >> "$HOME/.bashrc"
+  # Deliberately NOT exporting TR_PROJECTS. The tools already default to
+  # that exact path, so the export bought nothing -- and TR_PROJECTS is the
+  # variable that lifts the container-mounted requirement. Setting it in
+  # ~/.bashrc pointed it at the real container and left the escape hatch
+  # open in every shell. Set it only for a throwaway root you mean to use.
   # ~/.local/sbin holds the case-guard wrapper and must precede ~/.local/bin,
   # where the real claude launcher lives, for the shadowing to work.
   echo "export PATH=\"\$HOME/.local/sbin:\$HOME/.local/bin:\$PATH\"" >> "$HOME/.bashrc"

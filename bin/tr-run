@@ -14,13 +14,21 @@
 
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Captured before the default is applied: an explicit TR_PROJECTS is a
-# deliberate act (fixtures, a mock-server run, a throwaway root) and lifts
-# the mount requirement, exactly as trlib.PROJECTS_OVERRIDDEN does for the
-# Python tools. Same rule everywhere or the escape hatch works in one half
-# of the kit and not the other.
-PROJECTS_OVERRIDDEN=${TR_PROJECTS+y}
-TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
+# Pointing TR_PROJECTS somewhere ELSE (fixtures, a mock-server run, a
+# throwaway root) lifts the mount requirement, exactly as
+# trlib.PROJECTS_OVERRIDDEN does for the Python tools. Same rule everywhere,
+# or the escape hatch works in one half of the kit and not the other.
+#
+# Not ${TR_PROJECTS+y}: tr-setup exported the variable to this very default
+# in ~/.bashrc, which left it *set* in every interactive shell and so held
+# the hatch open on the real container permanently.
+DEFAULT_PROJECTS="$HOME/translation-work/confidential-projects"
+TR_PROJECTS="${TR_PROJECTS:-$DEFAULT_PROJECTS}"
+if [[ "$(readlink -f "$TR_PROJECTS")" == "$(readlink -f "$DEFAULT_PROJECTS")" ]]; then
+  PROJECTS_OVERRIDDEN=""
+else
+  PROJECTS_OVERRIDDEN="y"
+fi
 
 # Resolve the active project unless TR_ROOT was given explicitly.
 # The mountpoint directory exists whether or not the container is open, so
