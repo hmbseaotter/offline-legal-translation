@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""tr-inventory - inventory every file in source/ and detect its language.
+
+Usage:  tr-inventory [--rescan] [--no-ocr] [--limit N]
+
+Client drops arrive as nested folder trees mixing Slovene with English,
+Croatian/Serbian, Armenian and whatever else. This walks source/ in full,
+records every file whether or not the pipeline can translate it, and decides
+which language each one is in. Only the Slovene files go on to tr-run.
+
+WHERE THE OUTPUT GOES, and why it matters:
+
+  work/inventory/manifest.tsv    every file, with its path -- STAYS INSIDE
+  work/inventory/by-lang/*.txt   paths grouped by language -- STAYS INSIDE
+  work/inventory/summary.txt     counts only -- this is the client report
+
+File paths in a criminal matter routinely carry party names, dates and case
+numbers, so the first two are case material and never leave the container.
+summary.txt holds no paths, which is what makes it safe to send.
+
+Resumable: a file already in the manifest with the same size and mtime is not
+re-examined. --rescan forces a fresh look at everything.
+
+OPERATOR ONLY. This reads every client document. Run it in a plain terminal,
+never with an assistant attached.
+"""
+import os, sys, csv, subprocess, argparse, tempfile, shutil
+from collections import Counter
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+import trlib
+import trlang
+
+SAMPLE_WORDS = 400          # enough to decide; no reason to read whole files
+OCR_SAMPLE_LANGS = os.environ.get("TR_OCR_SAMPLE_LANGS", "slv+hrv+eng")
+
+TEXT_EXT  = {".txt", ".md", ".csv", ".tsv", ".log"}
+# Formats with no text extractor here. Counted and reported, never guessed at.
+OPAQUE_EXT = {".doc", ".odt", ".rtf", ".ods", ".ppt", ".pptx", ".odp",
+              ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif", ".bmp",
+              ".zip", ".rar", ".7z", ".msg", ".eml", ".mp3", ".mp4", ".wav"}
+
+
+def _cap(words):
+    return " ".join(words[:SAMPLE_WORDS])
+
+
+def from_docx(path):
+    import docx
+    d = docx.Document(path)
+    out = []
+    for p in d.paragraphs:
+        if p.text.strip():
+            out.extend(p.text.split())
+        if len(out) >= SAMPLE_WORDS:
+            return _cap(out), "docx"
+    for t in d.tables:
+        for r in t.rows:
+            for c in r.cells:
+                if c.text.strip():
+                    out.extend(c.text.split())
+            if len(out) >= SAMPLE_WORDS:
+                return _cap(out), "docx"
+    return _cap(out), "docx"
+
+
+def from_xlsx(path):
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    out = []
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(values_only=True):
+            for v in row:
+                if isinstance(v, str) and v.strip():
+                    out.extend(v.split())
+            if len(out) >= SAMPLE_WORDS:
+                wb.close()
+                return _cap(out), "xlsx"
+    wb.close()
+    return _cap(out), "xlsx"
+
+
+def from_text(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return _cap(fh.read(200_000).split()), "text"
+
+
+def from_pdf(path, allow_ocr=True):
+    """Text layer if there is one; otherwise OCR a couple of pages.
+
+    A scanned PDF has no text to detect a language from, and ocrmypdf needs
+    to be told a language before it can make any. Sampling two pages with a
+    combined language set breaks that circle: detect from the sample, then
+    the real OCR pass can be told the right language instead of guessing.
+    """
+    try:
+        r = subprocess.run(["pdftotext", "-l", "5", "-layout", path, "-"],
+                           capture_output=True, timeout=120)
+        words = r.stdout.decode("utf-8", "replace").split()
+    except Exception:
+        words = []
+    if len(words) >= trlang.MIN_TOKENS:
+        return _cap(words), "pdf-text"
+    if not allow_ocr:
+        return "", "pdf-needs-ocr"
+    if not (shutil.which("pdftoppm") and shutil.which("tesseract")):
+        return "", "pdf-needs-ocr"
+    tmp = tempfile.mkdtemp(prefix="trinv-")
+    try:
+        subprocess.run(["pdftoppm", "-jpeg", "-r", "150", "-f", "1", "-l", "2",
+                        path, os.path.join(tmp, "pg")],
+                       capture_output=True, timeout=180)
+        got = []
+        for img in sorted(os.listdir(tmp)):
+            r = subprocess.run(
+                ["tesseract", os.path.join(tmp, img), "stdout",
+                 "-l", OCR_SAMPLE_LANGS],
+                capture_output=True, timeout=180)
+            got.extend(r.stdout.decode("utf-8", "replace").split())
+            if len(got) >= SAMPLE_WORDS:
+                break
+        return _cap(got), "pdf-ocr-sample"
+    except Exception:
+        return "", "pdf-needs-ocr"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def extract(path, ext, allow_ocr):
+    try:
+        if ext == ".docx":
+            return from_docx(path)
+        if ext == ".xlsx":
+            return from_xlsx(path)
+        if ext in TEXT_EXT:
+            return from_text(path)
+        if ext == ".pdf":
+            return from_pdf(path, allow_ocr)
+        if ext in OPAQUE_EXT:
+            return "", "no-extractor"
+    except Exception as e:
+        return "", f"error: {type(e).__name__}"
+    return "", "no-extractor"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--rescan", action="store_true",
+                    help="re-examine files already in the manifest")
+    ap.add_argument("--no-ocr", action="store_true",
+                    help="do not sample-OCR scanned PDFs; mark them instead")
+    ap.add_argument("--limit", type=int, default=0)
+    a = ap.parse_args()
+
+    # Resolve the project first: "the container is not mounted" must be the
+    # message you get when the container is not mounted, not a complaint
+    # about dictionaries.
+    src = trlib.path("source")
+    if not os.path.isdir(src):
+        sys.exit(f"no source directory: {src}")
+
+    det = trlang.detector()
+    if not det.ready():
+        sys.exit("\n" + det.why_not_ready() + "\n")
+    outdir = trlib.path("work", "inventory")
+    os.makedirs(os.path.join(outdir, "by-lang"), exist_ok=True)
+    manifest = os.path.join(outdir, "manifest.tsv")
+
+    prior = {}
+    if os.path.exists(manifest) and not a.rescan:
+        with open(manifest, encoding="utf-8") as fh:
+            for row in csv.DictReader(fh, delimiter="\t"):
+                prior[row["path"]] = row
+
+    files = []
+    for dp, _, fns in os.walk(src):
+        for fn in sorted(fns):
+            if fn.startswith(("~$", ".")):
+                continue
+            files.append(os.path.relpath(os.path.join(dp, fn), src))
+    files.sort()
+    if a.limit:
+        files = files[:a.limit]
+
+    rows, reused = [], 0
+    for i, rel in enumerate(files, 1):
+        full = os.path.join(src, rel)
+        st = os.stat(full)
+        old = prior.get(rel)
+        if old and old.get("bytes") == str(st.st_size) \
+                and old.get("mtime") == f"{st.st_mtime:.0f}":
+            rows.append(old); reused += 1
+        else:
+            ext = os.path.splitext(rel)[1].lower()
+            text, method = extract(full, ext, allow_ocr=not a.no_ocr)
+            if text:
+                lang, conf, note = det.detect(text)
+            else:
+                lang, conf, note = "unknown", 0.0, method
+            rows.append({"path": rel, "ext": ext, "bytes": str(st.st_size),
+                         "mtime": f"{st.st_mtime:.0f}", "lang": lang,
+                         "confidence": f"{conf:.2f}", "method": method,
+                         "note": note})
+        sys.stderr.write(f"\r  {i}/{len(files)} ")
+        sys.stderr.flush()
+    sys.stderr.write("\n")
+
+    cols = ["path", "ext", "bytes", "mtime", "lang", "confidence", "method", "note"]
+    with open(manifest, "w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=cols, delimiter="\t",
+                           extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+    by = {}
+    for r in rows:
+        by.setdefault(r["lang"], []).append(r["path"])
+    for d in os.listdir(os.path.join(outdir, "by-lang")):
+        os.remove(os.path.join(outdir, "by-lang", d))
+    for lang, paths in by.items():
+        with open(os.path.join(outdir, "by-lang", f"{lang}.txt"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("\n".join(sorted(paths)) + "\n")
+
+    counts = Counter(r["lang"] for r in rows)
+    fmts = Counter(r["ext"] or "(none)" for r in rows)
+    lines = []
+    lines.append(f"Project:        {trlib.project_name()}")
+    lines.append(f"Files inventoried: {len(rows)}")
+    lines.append("")
+    lines.append("By detected source language:")
+    for lang, n in counts.most_common():
+        mark = "  <- to translate" if lang == trlang.TARGET else ""
+        lines.append(f"  {trlang.LABEL.get(lang, lang):<20} {n:>6}{mark}")
+    lines.append("")
+    lines.append("By file format:")
+    for ext, n in fmts.most_common():
+        lines.append(f"  {ext:<20} {n:>6}")
+    undet = counts.get("unknown", 0)
+    if undet:
+        lines.append("")
+        lines.append(f"{undet} file(s) undetermined - listed in "
+                     f"by-lang/unknown.txt for manual review.")
+    summary = "\n".join(lines) + "\n"
+
+    with open(os.path.join(outdir, "summary.txt"), "w", encoding="utf-8") as fh:
+        fh.write(summary)
+
+    print(summary)
+    if reused:
+        print(f"({reused} unchanged file(s) reused from the previous scan; "
+              f"--rescan to redo)")
+    print(f"manifest:  {manifest}       <- contains paths, keep inside the container")
+    print(f"summary:   {os.path.join(outdir, 'summary.txt')}   <- counts only, safe to send")
+
+
+if __name__ == "__main__":
+    main()

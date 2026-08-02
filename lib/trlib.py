@@ -120,6 +120,31 @@ _load_project_conf()
 # affected file reports as missing forever.
 OUT_EXT = {".pdf": ".docx", ".txt": ".docx"}
 
+def manifest_paths(lang=None):
+    """Source-relative paths from the tr-inventory manifest.
+
+    Returns None when no manifest exists -- which means triage has not been
+    run, not that there are no files. Callers must tell those apart: with a
+    mixed-language drop, translating everything is the expensive mistake.
+    """
+    mf = os.path.join(ROOT or "", "work", "inventory", "manifest.tsv")
+    if not ROOT or not os.path.exists(mf):
+        return None
+    out = []
+    with open(mf, encoding="utf-8") as fh:
+        head = fh.readline().rstrip("\n").split("\t")
+        try:
+            i_path, i_lang = head.index("path"), head.index("lang")
+        except ValueError:
+            return None
+        for ln in fh:
+            cols = ln.rstrip("\n").split("\t")
+            if len(cols) > max(i_path, i_lang):
+                if lang is None or cols[i_lang] == lang:
+                    out.append(cols[i_path])
+    return out
+
+
 def target_name(rel, suffix=None):
     """The deliverable's name for a source file: suffix applied, extension
     mapped. Filenames are otherwise preserved -- design invariant 1."""
