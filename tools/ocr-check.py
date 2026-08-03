@@ -56,13 +56,38 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import trlib  # noqa: E402
 
 OLLAMA = os.environ.get("TR_OLLAMA", "http://127.0.0.1:11434")
-VISION_MODEL = os.environ.get("TR_VISION_MODEL", "qwen3.6:latest")
+# deepseek-ocr:3b, not the 36B general model. Measured on the same A4 page of
+# Slovene legal text at 200 dpi: 88 seconds against 2,855 on a real page with
+# qwen3.6 -- roughly thirty times faster -- with all 38 diacritics and all 26
+# numbers correct and 100% agreement with Tesseract. A model built for reading
+# documents beats a much larger one asked to read a document as a favour.
+#
+# TR_VISION_MODEL overrides it. qwen3.6 remains the fallback worth trying on a
+# page deepseek cannot make sense of, since their failure modes differ.
+VISION_MODEL = os.environ.get("TR_VISION_MODEL", "deepseek-ocr:3b")
 OCR_LANGS = os.environ.get("TR_OCR_LANGS", "slv+eng")
 
 # The tokens with legal consequence. A wrong word is an edit; a wrong number
 # is a different case.
 NUM_RE = re.compile(r"\d[\d.,:/-]*\d|\d")
 DIACRITICS = "čšžćđČŠŽĆĐ"
+
+PROMPT_FULL = ("Transcribe all text in this document image exactly as it "
+               "appears. Preserve line breaks, diacritics, numbers and "
+               "punctuation. Output only the transcription.")
+
+# The cheap question. Only number disagreements are acted on, and generation
+# is what the wall clock is made of: a real page produced ~500 words of
+# transcription in 45 minutes on the 36B model, where its numbers alone would
+# have been a tenth of that. Asking for the whole page in order to compare a
+# fiftieth of it was the wrong trade.
+PROMPT_NUMBERS = ("List every number visible in this document image - dates, "
+                  "case numbers, reference numbers, amounts, quantities, "
+                  "percentages. One per line, exactly as printed, including "
+                  "any punctuation inside the number. No other text, no "
+                  "commentary, no headings.")
+
+NUMBERS_ONLY = True     # cleared by --full
 
 
 def render(pdf, pages, tmp):
@@ -121,9 +146,7 @@ def vision(img):
         b64 = base64.b64encode(fh.read()).decode()
     body = json.dumps({
         "model": VISION_MODEL,
-        "prompt": ("Transcribe all text in this document image exactly as it "
-                   "appears. Preserve line breaks, diacritics, numbers and "
-                   "punctuation. Output only the transcription."),
+        "prompt": PROMPT_NUMBERS if NUMBERS_ONLY else PROMPT_FULL,
         "images": [b64], "stream": True,
         "options": {"temperature": 0.1, "num_ctx": 8192}}).encode()
     req = urllib.request.Request(OLLAMA + "/api/generate", body,
@@ -175,7 +198,17 @@ def main():
     ap.add_argument("pdf")
     ap.add_argument("--pages", type=int, default=2)
     ap.add_argument("--no-vision", action="store_true")
+    ap.add_argument("--full", action="store_true",
+                    help="ask the vision model for the whole page rather than "
+                         "just its numbers. Far slower; only number "
+                         "disagreements are acted on")
+    ap.add_argument("--gate", type=float, default=6.0,
+                    help="skip the vision pass where fewer than this percent "
+                         "of Tesseract words were doubtful (default 6). "
+                         "0 disables the gate")
     a = ap.parse_args()
+    global NUMBERS_ONLY
+    NUMBERS_ONLY = not a.full
 
     if not os.path.isfile(a.pdf):
         sys.exit(f"no such file: {a.pdf}")
@@ -189,11 +222,12 @@ def main():
         if VISION_MODEL.split(":")[0] not in have:
             sys.exit(f"vision model {VISION_MODEL} is not registered.\n"
                      f"Either pull it or run with --no-vision.")
-        print(f"  Tesseract runs in seconds; the vision pass takes about 7 "
-              f"minutes a page,")
-        print(f"  plus a one-off model load. {a.pages} page(s) means roughly "
-              f"{7 * a.pages + 8} minutes.")
-        print(f"  --no-vision gives the Tesseract-only view immediately.\n")
+        print(f"  Tesseract runs in seconds. The vision pass with "
+              f"{VISION_MODEL}")
+        print(f"  takes roughly 1.5 minutes a page once loaded, and only runs "
+              f"where")
+        print(f"  Tesseract was unsure (--gate {a.gate:.0f}%). --no-vision "
+              f"skips it entirely.\n")
 
     tmp = tempfile.mkdtemp(prefix="ocrchk-")
     try:
@@ -202,6 +236,7 @@ def main():
             sys.exit("could not render any page - is this a PDF?")
         print(f"  {len(imgs)} page(s) rendered at 200 dpi\n")
 
+        gated = 0
         for n, img in enumerate(imgs, 1):
             p = os.path.join(tmp, img)
             t0 = time.time()
@@ -239,18 +274,31 @@ def main():
                 print()
                 continue
 
+            # The gate. Page 2 of a real document had 4% of its words doubtful
+            # and agreed with the vision model on all 29 numbers; page 1 had
+            # 9% doubtful and disagreed on 17. Tesseract's own confidence
+            # predicted which page needed a second opinion before any second
+            # opinion was taken -- so spend the expensive pass where the cheap
+            # one is unsure, not everywhere.
+            if a.gate > 0 and conf and pct < a.gate:
+                print(f"    vision      skipped: {pct:.0f}% doubtful is below "
+                      f"the {a.gate:.0f}% gate")
+                print(f"                Tesseract is confident here. --gate 0 "
+                      f"to check anyway.")
+                gated += 1
+                print()
+                continue
+
             # Say this before the wait, not after. The vision model is 23 GB
             # against gams3's 13 on a 30 GB machine, so the first call evicts
             # the translation model and loads this one before any inference
             # starts -- several minutes of complete silence, which reads as a
             # hang rather than as work.
             if n == 1:
-                print(f"    vision      loading {VISION_MODEL} (23 GB) and "
-                      f"reading page 1.", flush=True)
-                print(f"                First page includes the model load; "
-                      f"allow 10-15 minutes.", flush=True)
-                print(f"                Later pages take about 7. Nothing is "
-                      f"wrong if this sits quiet.", flush=True)
+                print(f"    vision      loading {VISION_MODEL}, then reading "
+                      f"page 1.", flush=True)
+                print(f"                The first page includes the model "
+                      f"load.", flush=True)
             else:
                 print(f"    vision      reading page {n}, about 7 minutes.",
                       flush=True)
@@ -286,6 +334,12 @@ def main():
     finally:
         subprocess.run(["rm", "-rf", tmp], capture_output=True)
 
+    if gated:
+        print(f"  {gated} of {len(imgs)} page(s) skipped the vision pass: "
+              f"Tesseract was confident.")
+        print(f"  On a corpus this is where the time is saved - the "
+              f"expensive read runs only")
+        print(f"  where the cheap one is unsure.\n")
     print(f"  transcriptions written to {out}")
     print("  Read them against the page images. What matters is not the word")
     print("  count but whether the numbers, names and diacritics are right.")
