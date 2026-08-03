@@ -64,6 +64,35 @@ if (( fail )); then
   exit 1
 fi
 
+# Second gate: the documented tables must match lib/registry.py.
+#
+# The environment table said TR_PROMPT_VERSION defaulted to v1 while the code
+# had said v4 for weeks, and six tools were documented nowhere at all. Both
+# survived because a stale table looks exactly like a current one. The tables
+# are now generated from the registry, so the only way they can disagree is
+# if someone edited the registry and did not regenerate -- which is what this
+# catches, at the point where it is still one command to fix.
+#
+# Uses the kit venv when it exists, because checking the .docx needs
+# python-docx; falls back to the system interpreter, which checks the
+# markdown and says it skipped the rest.
+if [[ -x tools/gen-docs.py ]]; then
+  py=python3
+  [[ -x "$HOME/.translate-venv/bin/python" ]] && py="$HOME/.translate-venv/bin/python"
+  if ! out="$("$py" tools/gen-docs.py 2>&1)"; then
+    {
+      echo
+      echo "  BLOCKED: the documented tables have drifted from lib/registry.py"
+      echo
+      printf '%s\n' "$out" | sed 's/^/    /'
+      echo
+      echo "      tools/gen-docs.py --apply     then stage the result"
+      echo
+    } >&2
+    exit 1
+  fi
+fi
+
 # Chain to the workspace-wide gate, which this repo's local core.hooksPath
 # would otherwise suppress.
 globaldir=$(git config --global --get core.hooksPath || true)
