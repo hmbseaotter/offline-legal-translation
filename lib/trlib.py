@@ -743,21 +743,50 @@ def _db():
         model TEXT, prompt_version TEXT, ts REAL)""")
     return db
 
-def _key(src, direction):
+def _key(src, direction, gloss_sig=""):
+    """Cache identity for a segment.
+
+    gloss_sig is the glossary block that applied to THIS segment, not the
+    whole glossary. Without it in the key, adding a term and re-running
+    changed nothing: every affected segment was served from cache under the
+    old rendering, so the one mechanism the kit has for terminology
+    consistency did nothing on any document already translated. The manual
+    said re-running after a glossary edit was cheap because the memory
+    reuses segments -- which was true, and was exactly the reason the edit
+    had no effect.
+
+    Keyed on the applicable terms rather than the whole file so that adding
+    a banking term does not invalidate a corpus of criminal-procedure
+    segments it never touches.
+    """
     h = hashlib.sha256()
-    h.update(f"{direction}\x00{MODEL}\x00{PROMPT_VERSION}\x00{src}".encode())
+    h.update(f"{direction}\x00{MODEL}\x00{PROMPT_VERSION}\x00{gloss_sig}"
+             f"\x00{src}".encode())
     return h.hexdigest()
 
-def tm_get(src, direction):
+def tm_current_key(src, direction, gloss):
+    """The key tr-run would use for this segment right now.
+
+    tr-lint needs it to tell "the row tr-run will reuse today" from "a row
+    left behind by an earlier glossary". Without that distinction, editing
+    one term makes every segment it touches appear twice and report as
+    INCON -- the same false alarm that prompt-version bumps used to cause,
+    in a new disguise.
+    """
+    return _key(src, direction, glossary_block(src, gloss or []))
+
+
+def tm_get(src, direction, gloss_sig=""):
     db = _db()
-    r = db.execute("SELECT tgt FROM tm WHERE key=?", (_key(src, direction),)).fetchone()
+    r = db.execute("SELECT tgt FROM tm WHERE key=?",
+                   (_key(src, direction, gloss_sig),)).fetchone()
     db.close()
     return r[0] if r else None
 
-def tm_put(src, tgt, direction):
+def tm_put(src, tgt, direction, gloss_sig=""):
     db = _db()
     db.execute("INSERT OR REPLACE INTO tm VALUES(?,?,?,?,?,?,?)",
-               (_key(src, direction), src, tgt, direction, MODEL,
+               (_key(src, direction, gloss_sig), src, tgt, direction, MODEL,
                 PROMPT_VERSION, time.time()))
     db.commit(); db.close()
 
@@ -801,15 +830,86 @@ def build_prompt(src_lang, tgt_lang, gloss_block):
                .replace("{TGT}", LANG.get(tgt_lang, tgt_lang)) \
                .replace("{GLOSSARY}", gloss_block)
 
+# A Slovene amount: optional period-grouped thousands, comma decimal, one or
+# two decimal digits. The lookarounds keep it from starting or ending inside a
+# longer run of digits and separators.
+_SL_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:\.\d{3})*|\d+),(\d{1,2})(?![\d,.])")
+_EN_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)\.(\d{1,2})(?![\d,.])")
+
+
+def _regroup(digits, sep):
+    out = []
+    while len(digits) > 3:
+        out.insert(0, digits[-3:])
+        digits = digits[:-3]
+    out.insert(0, digits)
+    return sep.join(out)
+
+
+def fix_numeric_format(src, tgt, src_lang, tgt_lang):
+    """Rewrite amounts the model left in the source's number format.
+
+    WHY THIS IS NOT LEFT TO THE MODEL
+
+    The prompt tells it to convert 12.450,00 to 12,450.00 and it mostly does,
+    but "mostly" is the wrong standard for a figure in a legal document, and
+    the translator found whole tables of amounts still carrying the Slovene
+    comma. Fixing those by hand is exactly the tedium this pipeline exists to
+    remove. Separator conversion is arithmetic; it does not need a language
+    model and should not depend on one.
+
+    DRIVEN FROM THE SOURCE, NOT THE TARGET
+
+    The obvious implementation -- find source-format numbers in the target and
+    swap the separators -- is unsafe in the en->sl direction, where "5.10" is
+    both an amount and a section reference and nothing in the string says
+    which. So this only rewrites a number that literally appeared in the
+    SOURCE in source format and survived into the target unchanged. It cannot
+    invent a conversion, and a target number with no counterpart in the source
+    is left alone.
+
+    Idempotent: a number the model already converted no longer matches the
+    source-format pattern, so it is not touched twice.
+
+    KNOWN LIMIT, en->sl ONLY. English writes both "1.50" as an amount and
+    "5.10" as a section reference, and nothing in the string distinguishes
+    them, so an en->sl run turns "Section 5.10" into "Section 5,10". The
+    sl->en direction has no such ambiguity, because a Slovene amount needs a
+    comma decimal and a section reference never has one. Nothing here is
+    wrong for the pair in use; verify it before the reverse pair is, which
+    is the same caveat the manual already carries for German.
+    """
+    if not src or not tgt or {src_lang, tgt_lang} != {"sl", "en"}:
+        return tgt
+    if src_lang == "sl":
+        pat, thou_out, dec_out = _SL_AMOUNT, ",", "."
+        strip = "."
+    else:
+        pat, thou_out, dec_out = _EN_AMOUNT, ".", ","
+        strip = ","
+
+    subs = {}
+    for m in pat.finditer(src):
+        whole = m.group(0)
+        digits = m.group(1).replace(strip, "")
+        subs[whole] = _regroup(digits, thou_out) + dec_out + m.group(2)
+    # Longest first: "1.234.567,89" must not be partly rewritten by a shorter
+    # match that happens to sit inside it.
+    for old in sorted(subs, key=len, reverse=True):
+        if old in tgt:
+            tgt = tgt.replace(old, subs[old])
+    return tgt
+
+
 def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     if not is_translatable(text):
         # Not model work, but not necessarily unchanged either: a segment that
         # is only a date or an amount still gets its locale converted.
         return localize(text, src_lang, tgt_lang)
-    cached = tm_get(text, f"{src_lang}-{tgt_lang}")
+    gb = glossary_block(text, gloss or [])
+    cached = tm_get(text, f"{src_lang}-{tgt_lang}", gb)
     if cached is not None:
         return cached
-    gb = glossary_block(text, gloss or [])
     payload = {
         "model": MODEL,
         "system": build_prompt(src_lang, tgt_lang, gb),
@@ -828,7 +928,8 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
                 out = json.loads(r.read())["response"].strip()
             out = re.sub(r"^```.*?\n|```$", "", out, flags=re.S).strip()
             if out:
-                tm_put(text, out, f"{src_lang}-{tgt_lang}")
+                out = fix_numeric_format(text, out, src_lang, tgt_lang)
+                tm_put(text, out, f"{src_lang}-{tgt_lang}", gb)
                 return out
             last = "empty response"
         except Exception as e:
@@ -930,7 +1031,7 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
         if not is_translatable(t):
             out[i] = localize(t, src_lang, tgt_lang)
             continue
-        cached = tm_get(t, direction)
+        cached = tm_get(t, direction, glossary_block(t, gloss or []))
         if cached is not None:
             out[i] = cached
             continue
@@ -956,8 +1057,12 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
                     report(done, len(texts), texts[i])
             return
         for i, tr in zip(idxs, got):
+            tr = fix_numeric_format(texts[i], tr, src_lang, tgt_lang)
             out[i] = tr
-            tm_put(texts[i], tr, direction)
+            # Keyed on the terms that apply to THIS segment, matching the
+            # single-segment path -- not on the block the batch was sent
+            # with, which is the union across twenty segments.
+            tm_put(texts[i], tr, direction, glossary_block(texts[i], gloss or []))
             done += 1
             if report:
                 report(done, len(texts), texts[i])

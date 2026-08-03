@@ -103,21 +103,28 @@ def main():
     # reported as INCON: bumping the version, which invariant 7 requires,
     # made the whole corpus look inconsistent. The default is what tr-run
     # would actually reuse today.
+    gloss = trlib.load_glossary()
     if a.all_versions:
         rows = db.execute(
             "SELECT src, tgt, direction, model, prompt_version FROM tm").fetchall()
     else:
-        rows = db.execute(
-            "SELECT src, tgt, direction, model, prompt_version FROM tm "
+        # The glossary is part of the key too, so a term edit also leaves the
+        # superseded rows behind. Filtering on model and prompt version alone
+        # would let both the old and the new rendering through and report the
+        # segment as INCON -- the same false alarm prompt bumps used to cause.
+        # Keep only what tr-run would actually reuse today.
+        raw = db.execute(
+            "SELECT key, src, tgt, direction, model, prompt_version FROM tm "
             "WHERE model = ? AND prompt_version = ?",
             (trlib.MODEL, trlib.PROMPT_VERSION)).fetchall()
+        rows = [(src, tgt, direction, model, pver)
+                for key, src, tgt, direction, model, pver in raw
+                if key == trlib.tm_current_key(src, direction, gloss)]
         if not rows:
             sys.exit(f"no segments for model {trlib.MODEL} prompt "
                      f"{trlib.PROMPT_VERSION} - run tr-run, or use "
                      f"--all-versions to inspect superseded ones")
     db.close()
-
-    gloss = trlib.load_glossary()
     findings = []
     by_src = collections.defaultdict(set)
 
