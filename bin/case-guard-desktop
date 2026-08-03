@@ -32,6 +32,22 @@ set -uo pipefail
 MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
 REAL="${CLAUDE_DESKTOP_BIN:-/usr/bin/claude-desktop}"
 
+# --check reports the decision and launches nothing, shows nothing. Testing
+# this guard by running it for real put an alarming dialog on the operator's
+# screen that no operator action had caused -- a test should not be
+# indistinguishable from the event it is testing.
+CHECK=0
+[[ "${1:-}" == "--check" ]] && { CHECK=1; shift; }
+
+if [[ $CHECK -eq 1 ]]; then
+  if mountpoint -q "$MNT" 2>/dev/null; then
+    echo "would BLOCK: $MNT is mounted"
+    exit 3
+  fi
+  echo "would allow: $MNT is not mounted"
+  exit 0
+fi
+
 if mountpoint -q "$MNT" 2>/dev/null; then
   TITLE="Claude blocked: the case container is open"
   BODY="Case material is mounted at
