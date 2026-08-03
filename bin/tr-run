@@ -75,6 +75,44 @@ done
 #
 # Resolved once for the whole batch rather than per file, so this costs one
 # interpreter start regardless of corpus size.
+# Which model and prompt produced a deliverable.
+#
+# The staleness test used to be "output newer than source", which is a
+# question about editing, not about correctness. TR_PROMPT_VERSION is part
+# of the translation memory's key, so bumping it invalidates every cached
+# SEGMENT -- but tr-run skipped the whole FILE before the memory was ever
+# consulted, so a bump changed nothing and the old drafts stood. The manual
+# said "Bump to force retranslation"; it did not.
+#
+# Found the hard way: the prompt was corrected because the model was
+# discarding legible text, the version went to v5, the re-run reported
+# "skipped: 3" in three seconds, and the defective drafts were still there.
+#
+# Read from trlib rather than restated here -- the same rule about one
+# implementation that lib/guard.sh and target_name exist for.
+read -r MODEL_NOW PROMPT_NOW < <(python3 -c '
+import os, sys
+sys.path.insert(0, os.path.join("'"$BIN"'", "..", "lib"))
+import trlib
+print(trlib.MODEL, trlib.PROMPT_VERSION)' 2>/dev/null)
+MODEL_NOW="${MODEL_NOW:-unknown}"; PROMPT_NOW="${PROMPT_NOW:-unknown}"
+DELIV="$TR_ROOT/work/deliverables.tsv"
+
+deliv_current() {           # 0 when this file was produced by THIS model+prompt
+  [[ -f "$DELIV" ]] || return 1
+  awk -F'\t' -v r="$1" -v m="$MODEL_NOW" -v v="$PROMPT_NOW" \
+      'NR>1 && $1==r && $2==m && $3==v {ok=1} END{exit !ok}' "$DELIV"
+}
+
+deliv_record() {
+  mkdir -p "$(dirname "$DELIV")"
+  [[ -f "$DELIV" ]] || printf 'path\tmodel\tprompt_version\twritten\n' > "$DELIV"
+  # Rewritten in place, inside the container. A mktemp here would put file
+  # paths -- which carry party names -- on the unencrypted root.
+  awk -F'\t' -v r="$1" 'NR==1 || $1!=r' "$DELIV" > "$DELIV.tmp" && mv "$DELIV.tmp" "$DELIV"
+  printf '%s\t%s\t%s\t%s\n' "$1" "$MODEL_NOW" "$PROMPT_NOW" "$(date -u +%FT%TZ)" >> "$DELIV"
+}
+
 declare -A TARGET
 name_batch() {
   local rel
@@ -183,7 +221,15 @@ for rel in "${FILES[@]}"; do
     echo "skip   $rel  (unsupported extension: $ext)"; ((skip_n++)); continue
   fi
   if [[ -f "$out" && "$out" -nt "$in" ]]; then
-    echo "skip   $rel"; ((skip_n++)); continue
+    if deliv_current "$rel"; then
+      echo "skip   $rel"; ((skip_n++)); continue
+    fi
+    # Up to date against its source, but produced by a different model or a
+    # superseded prompt. Say which, because "redo" with no reason reads like
+    # the cache failing. Segments the memory still holds are reused, so this
+    # is only expensive when the version actually moved.
+    was="$(awk -F'\t' -v r="$rel" 'NR>1 && $1==r {print $2" "$3; exit}' "$DELIV" 2>/dev/null)"
+    echo "redo   $rel  (${was:-provenance unrecorded} -> $MODEL_NOW $PROMPT_NOW)"
   fi
   if [[ $DRY -eq 1 ]]; then
     echo "would  $rel  ($ext)  ->  ${out#"$OUT"/}"; continue
@@ -196,6 +242,7 @@ for rel in "${FILES[@]}"; do
   "$worker" "$in" "$out" 2>&1 | tee -a "$LOG"
 
   if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
+    deliv_record "$rel"
     ((done_n++)); echo "  done in $(( $(date +%s) - t0 ))s" | tee -a "$LOG"
   else
     ((fail_n++)); echo "  FAILED" | tee -a "$LOG"
