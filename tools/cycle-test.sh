@@ -24,7 +24,38 @@ ok()   { printf '  ok    %s\n' "$1"; }
 bad()  { printf '  FAIL  %s\n' "$1"; fail=1; }
 check(){ if eval "$1"; then ok "$2"; else bad "$2"; fi; }
 
-step "0. before: container should be closed and the mountpoint immutable"
+# PRECONDITION, not a test.
+#
+# This exercises the closed -> open -> closed transition, so it has to start
+# from closed; there is no way to establish the "before" baseline otherwise.
+# That was previously written as three check calls, which meant an operator
+# who already had the container open got three FAIL lines, the whole suite
+# ran anyway, every functional check passed, and the run still ended in
+# CYCLE FAILED. The verdict blamed the system for the operator's starting
+# state, twice, and the second time cost a full read of the output to
+# discover nothing was actually broken.
+#
+# It also has to refuse rather than close the container itself. Step 6 closes
+# what step 1 opened; if the container was already open, that unmounts a
+# session this script did not start and may have real work in it. Closing
+# someone else's container is not a decision a test gets to make.
+if mountpoint -q "$MNT" 2>/dev/null; then
+  cat >&2 <<EOF
+
+  The container is open, and this test needs to start from closed - it
+  exercises the whole open/close cycle and cannot check the closed state
+  otherwise.
+
+  It will not close the container for you: it did not open it, and it has
+  no way to tell an idle mount from one with a batch running in it.
+
+    case-close      then run this again
+
+EOF
+  exit 2
+fi
+
+step "0. before: container is closed and the mountpoint immutable"
 case-status
 check '! mountpoint -q "$MNT"' "not mounted"
 check 'lsattr -d "$MNT" 2>/dev/null | cut -c5 | grep -q i' "mountpoint immutable"
@@ -38,6 +69,12 @@ check '[ -d "$MNT/_shared/glossary" ]' "_shared seeded by case-init"
 echo "  _shared contents: $(find "$MNT/_shared" -type f | wc -l) file(s)"
 
 step "2. create a project"
+# tr-project --new switches .active to the new project, and step 5 used to
+# delete .active outright. An operator with a real matter selected would
+# find no active project afterwards and no sign of what had changed it, so
+# remember what was there and put it back.
+PREV_ACTIVE="$(cat "$MNT/.active" 2>/dev/null || true)"
+[ -n "$PREV_ACTIVE" ] && echo "  active project before this run: $PREV_ACTIVE"
 tr-project --new "$PROJ" >/dev/null 2>&1
 check '[ -d "$MNT/$PROJ/source" ]' "project scaffolded"
 check '[ "$(cat "$MNT/.active" 2>/dev/null)" = "$PROJ" ]' ".active records it"
@@ -56,9 +93,16 @@ check '[ -f "$MNT/$PROJ/work/inventory/manifest.tsv" ]' "inventory written"
 
 step "5. tear the project down"
 rm -rf "${MNT:?}/$PROJ"
-rm -f "$MNT/.active"
+if [ -n "$PREV_ACTIVE" ]; then
+  printf '%s\n' "$PREV_ACTIVE" > "$MNT/.active"
+  echo "  active project restored: $PREV_ACTIVE"
+else
+  rm -f "$MNT/.active"
+fi
 rm -rf /tmp/cycle-fx
 check '[ ! -d "$MNT/$PROJ" ]' "project removed"
+check '[ "$(cat "$MNT/.active" 2>/dev/null || true)" = "$PREV_ACTIVE" ]' \
+      "active project left as found"
 
 step "6. close"
 case-close || { echo "case-close failed"; exit 1; }
