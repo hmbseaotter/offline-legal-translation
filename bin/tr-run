@@ -14,40 +14,9 @@
 
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Pointing TR_PROJECTS somewhere ELSE (fixtures, a mock-server run, a
-# throwaway root) lifts the mount requirement, exactly as
-# trlib.PROJECTS_OVERRIDDEN does for the Python tools. Same rule everywhere,
-# or the escape hatch works in one half of the kit and not the other.
-#
-# Not ${TR_PROJECTS+y}: tr-setup exported the variable to this very default
-# in ~/.bashrc, which left it *set* in every interactive shell and so held
-# the hatch open on the real container permanently.
-DEFAULT_PROJECTS="$HOME/translation-work/confidential-projects"
-TR_PROJECTS="${TR_PROJECTS:-$DEFAULT_PROJECTS}"
-if [[ "$(readlink -f "$TR_PROJECTS")" == "$(readlink -f "$DEFAULT_PROJECTS")" ]]; then
-  PROJECTS_OVERRIDDEN=""
-else
-  PROJECTS_OVERRIDDEN="y"
-fi
-
-# Resolve the active project unless TR_ROOT was given explicitly.
-# The mountpoint directory exists whether or not the container is open, so
-# -d says "the path is there", not "the data is encrypted". Translating a
-# corpus onto the bare mountpoint would write every source and target
-# sentence out in the clear. mountpoint -q is the test that means it.
-if [[ -z "${TR_ROOT:-}" ]]; then
-  [[ -n "${PROJECTS_OVERRIDDEN:-}" ]] || mountpoint -q "$TR_PROJECTS" 2>/dev/null || {
-    echo "container NOT mounted: $TR_PROJECTS" >&2
-    echo "Writing there now would put case material outside the encryption." >&2
-    echo "  check:  case-status" >&2
-    echo "  open:   case-open" >&2
-    echo "  never set up:  case-init 40G" >&2
-    exit 2; }
-  ACTIVE="$(cat "$TR_PROJECTS/.active" 2>/dev/null | tr -d '[:space:]')"
-  [[ -n "$ACTIVE" ]] || { echo "no active project. run: tr-project <name>" >&2; exit 2; }
-  TR_ROOT="$TR_PROJECTS/$ACTIVE"
-fi
-export TR_ROOT TR_PROJECTS
+source "$BIN/../lib/guard.sh"
+tr_guard_resolve_root \
+  "Writing there now would put case material outside the encryption."
 PROJECT="$(basename "$TR_ROOT")"
 
 # Per-project settings (language pair, suffix, OCR languages).
@@ -94,27 +63,31 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# A scanned PDF cannot be regenerated as a PDF, and plain text has no
-# formatting to preserve, so both deliver a .docx. This mirrors OUT_EXT in
-# lib/trlib.py, which is what tr-status consults: the two must agree, or
-# tr-run writes one name while tr-status looks for another and every
-# affected file reports as missing for good.
-out_ext_for() {
-  case "${1,,}" in
-    pdf|txt)             printf 'docx' ;;
-    xlsm|xltx|xltm)      printf 'xlsx' ;;
-    *)       printf '%s' "$1" ;;
-  esac
-}
-
-target_for() {                       # relpath -> absolute output path
-  local rel="$1" stem ext
-  if [[ "${rel##*/}" == *.* ]]; then
-    stem="${rel%.*}"; ext="${rel##*.}"
-    printf '%s/%s%s.%s' "$OUT" "$stem" "$SUFFIX" "$(out_ext_for "$ext")"
-  else
-    printf '%s/%s%s' "$OUT" "$rel" "$SUFFIX"
-  fi
+# Deliverable names come from trlib.target_name, not from a second copy of
+# the rule.
+#
+# This used to be out_ext_for() plus target_for(), a bash reimplementation
+# of trlib.OUT_EXT, with a comment on both sides warning that the two must
+# agree -- because if they drift, tr-run writes one name, tr-status looks
+# for another, and every affected file reports as missing for good. That
+# warning is the tell: a rule that needs a comment reminding two files to
+# stay equal is a rule that lives in the wrong number of places.
+#
+# Resolved once for the whole batch rather than per file, so this costs one
+# interpreter start regardless of corpus size.
+declare -A TARGET
+name_batch() {
+  local rel
+  printf '%s\n' "${FILES[@]}" | TR_SUFFIX="$SUFFIX" python3 -c '
+import os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "..", "lib"))
+import trlib
+out = sys.argv[2]
+for ln in sys.stdin:
+    rel = ln.rstrip("\n")
+    if rel:
+        print(rel + "\t" + os.path.join(out, trlib.target_name(rel)))
+' "$BIN/tr-run" "$OUT"
 }
 
 worker_for() {                       # extension -> worker, empty if unsupported
@@ -192,10 +165,15 @@ echo
 started=$(date +%s)
 done_n=0; skip_n=0; fail_n=0
 
+while IFS=$'\t' read -r _rel _tgt; do
+  [[ -n "$_rel" ]] && TARGET["$_rel"]="$_tgt"
+done < <(name_batch)
+
 for rel in "${FILES[@]}"; do
   [[ -z "$rel" ]] && continue
   in="$SRC/$rel"
-  out="$(target_for "$rel")"
+  out="${TARGET[$rel]:-}"
+  [[ -n "$out" ]] || { echo "skip   $rel  (no deliverable name)"; ((skip_n++)); continue; }
   ext="${rel##*.}"; ext="${ext,,}"
   worker="$(worker_for "$ext")"
 

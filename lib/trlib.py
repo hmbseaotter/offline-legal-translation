@@ -45,6 +45,10 @@ PROJECTS = os.environ.get(
     os.path.expanduser("~/translation-work/confidential-projects"))
 SHARED = os.path.join(PROJECTS, "_shared")
 
+# The kit root, two levels up from lib/trlib.py. The prompt and the
+# glossary base live here and travel with the repository.
+KIT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 DEFAULT_PROJECTS = os.path.expanduser("~/translation-work/confidential-projects")
 
 # Pointing TR_PROJECTS somewhere ELSE is the deliberate act -- fixtures, a
@@ -762,18 +766,31 @@ def tm_put(src, tgt, direction):
 LANG = {"sl": "Slovene", "en": "English", "de": "German"}
 
 def build_prompt(src_lang, tgt_lang, gloss_block):
-    """_DEFAULT_PROMPT below, unless a file overrides it.
+    """The kit's prompts/translate.txt, unless a project file overrides it.
 
-    The default travels with the kit, so a correction reaches every project
-    as soon as the kit is updated. case-init deliberately does not seed a
-    copy into _shared: a copy there wins over this default and would freeze
-    the prompt at the day the container was created, while TR_PROMPT_VERSION
-    went on advancing without it. An override is still honoured if one is
-    placed there on purpose -- per matter at <project>/prompts/translate.txt,
-    or across matters at _shared/prompts/translate.txt -- which is the case
-    that rule exists for.
+    Read from the file rather than embedded here, because it was embedded
+    here AND shipped as prompts/translate.txt, and nothing read the file.
+    Two copies of the same text with no mechanism connecting them: they were
+    byte-identical by luck, and the first edit to either would have made the
+    shipped file a lie about what the model is actually told. A prompt is
+    content, not code -- keeping it in one text file also makes changes to
+    it reviewable as prose.
+
+    The kit copy travels with the repository, so a correction reaches every
+    project as soon as the kit is updated. case-init deliberately does not
+    seed a copy into _shared: a copy there wins over this one and would
+    freeze the prompt at the day the container was created, while
+    TR_PROMPT_VERSION went on advancing without it. An override is still
+    honoured when placed on purpose -- per matter at
+    <project>/prompts/translate.txt, or across matters at
+    _shared/prompts/translate.txt -- which is the case that rule exists for.
     """
-    base = _DEFAULT_PROMPT
+    kit_prompt = os.path.join(KIT_DIR, "prompts", "translate.txt")
+    if not os.path.exists(kit_prompt):
+        sys.exit(f"the kit's prompt is missing: {kit_prompt}\n"
+                 f"It is the source of every translation instruction. Restore "
+                 f"it from the repository rather than translating without it.")
+    base = open(kit_prompt, encoding="utf-8").read()
     tpls = [shared("prompts", "translate.txt")]
     if ROOT and os.path.isdir(ROOT):                 # see load_glossary()
         tpls.append(path("prompts", "translate.txt"))   # project overrides shared
@@ -783,30 +800,6 @@ def build_prompt(src_lang, tgt_lang, gloss_block):
     return base.replace("{SRC}", LANG.get(src_lang, src_lang)) \
                .replace("{TGT}", LANG.get(tgt_lang, tgt_lang)) \
                .replace("{GLOSSARY}", gloss_block)
-
-_DEFAULT_PROMPT = """You are translating {SRC} legal documents into {TGT} for court proceedings.
-
-Rules:
-- Output ONLY the translation. No preamble, notes, or explanation.
-- Preserve meaning exactly. Do not summarize, expand, or improve the source.
-- Reproduce verbatim, untranslated: case numbers, file numbers, statutory
-  citations, article and paragraph references, personal names, and addresses.
-- Translate institution names into {TGT} (Okrožno sodišče v Ljubljani ->
-  District Court in Ljubljana). They are not identifiers.
-- Convert dates, amounts and times to {TGT} convention without changing the
-  value. Into English: March 5, 2024 — month name, day, comma, year; decimal
-  point and thousands comma (12,450.00); 12-hour clock with a.m./p.m.
-  Into Slovene: 5. marec 2024 — the day takes a period because it is an
-  ordinal, the month name is lowercase, all three parts spaced; decimal
-  comma and thousands point (12.450,00); 24-hour clock, never a.m./p.m.
-  Use one date format throughout; never switch mid-document.
-- Never alter a numeric value. Formatting may follow {TGT} convention;
-  the quantity, date, or time denoted must be identical.
-- If a passage is illegible or garbled, output OCR_ILLEGIBLE in its place
-  rather than guessing what it might have said.
-- Match the formal register of legal documents.
-
-{GLOSSARY}"""
 
 def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     if not is_translatable(text):
