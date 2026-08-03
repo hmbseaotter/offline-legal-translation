@@ -32,7 +32,7 @@ into a chat.
 
 USAGE
 
-  ocr-check.py <file.pdf> [--pages 2] [--no-vision]
+  ocr-check.py <file.pdf> [--pages N] [--gate PCT] [--no-vision]
 
 Vision costs about 3 minutes a page and Tesseract seconds, so two pages is
 under ten minutes. --no-vision gives the Tesseract-only view in seconds,
@@ -289,10 +289,25 @@ def main():
     ap.add_argument("pdf")
     ap.add_argument("--pages", type=int, default=2)
     ap.add_argument("--no-vision", action="store_true")
-    ap.add_argument("--gate", type=float, default=6.0,
+    # Calibrated against real pages, not guessed. Two documents, eight pages:
+    #
+    #   doubtful %   genuine number disagreements
+    #   ----------   ----------------------------
+    #        5 %     14      <- the page that needed the second engine
+    #        2 %      0
+    #      0-1 %      0      (six pages)
+    #
+    # The old default of 6 sat ABOVE every page measured, so it would have
+    # skipped the vision pass on the one page where the two engines disagreed
+    # fourteen times -- a gate that never opens is not a gate. 3 separates the
+    # two observed classes with a page's margin on each side.
+    #
+    # Two points is thin. Raise it if the vision pass keeps confirming
+    # Tesseract, lower it if disagreements turn up below the line.
+    ap.add_argument("--gate", type=float, default=3.0,
                     help="skip the vision pass where fewer than this percent "
-                         "of Tesseract words were doubtful (default 6). "
-                         "0 disables the gate")
+                         "of Tesseract words were doubtful (default 3). "
+                         "0 disables the gate and checks every page")
     a = ap.parse_args()
 
     if not os.path.isfile(a.pdf):
@@ -356,7 +371,7 @@ def main():
                     print(f"                {len(lownum)} unreadable token(s)"
                           f" contain digits - a hand-filled date or amount")
                     print(f"                  is the worst thing to guess at."
-                          f" Mark them [ILLEGIBLE] rather than translate them.")
+                          f" Mark them OCR_ILLEGIBLE rather than translate them.")
 
             if a.no_vision:
                 print(f"    page total  {(time.time() - page_t0) / 60:.1f} min")
