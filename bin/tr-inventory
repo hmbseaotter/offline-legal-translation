@@ -268,7 +268,9 @@ def main():
                     help="re-examine files already in the manifest")
     ap.add_argument("--no-ocr", action="store_true",
                     help="do not sample-OCR scanned PDFs; mark them instead")
-    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--limit", type=int, default=0, metavar="N",
+                    help="stop after N files, in walk order. For trying the "
+                         "run on a large drop before committing to it")
     ap.add_argument("--count", action="store_true",
                     help="read every file in full and count words and "
                          "segments, for estimating the volume of work")

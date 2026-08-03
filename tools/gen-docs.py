@@ -27,7 +27,7 @@ two of them from the third means they cannot drift: there is one place to
 edit, and forgetting to edit it is a different and much more visible kind of
 mistake than editing one copy of three.
 
-WHAT --check STILL CANNOT DO
+WHAT THE CHECK STILL CANNOT DO
 
 It verifies that the documents match the registry, and that the registry's
 defaults match the values actually written in the source. It cannot verify

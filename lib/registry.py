@@ -15,8 +15,9 @@ front of you when you change it.
 
 Adding a variable or a command means editing this file. The documents follow
 mechanically, so they cannot disagree with it, and the only remaining
-question is whether THIS file matches the code -- which gen-docs.py --check
-also verifies, by reading the defaults straight out of the source.
+question is whether THIS file matches the code -- which gen-docs.py also
+verifies when run with no arguments, by reading the defaults straight out of
+the source.
 """
 
 # (name, default, purpose)
@@ -77,8 +78,8 @@ TOOLS = [
      'Register the GGUF with Ollama as `gams3:q8`'),
     ('`tr-fixtures [dir]`',
      'Generate synthetic test documents, including a mixed-language drop'),
-    ('`tr-inventory`',
-     'Classify every file in `source/` by source language. Run this before anything else'),
+    ('`tr-inventory [--rescan] [--no-ocr] [--limit N]`',
+     'Classify every file in `source/` by source language. Run this before anything else. Against a real drop it is **operator only** — it opens every client file; against the fixture drop it is the documented development path'),
     ('`tr-inventory --count [--with-ocr]`',
      'Words and segments per file, to size the job before starting. Scanned PDFs need `--with-ocr`'),
     ('`tr-status`',
@@ -98,9 +99,12 @@ TOOLS = [
     ('`case-guard-desktop [--check]`',
      'The same refusal for the desktop app, which never consults `PATH`. Installed by `tools/install-desktop-guard.sh`'),
     ('`tools/cycle-test.sh`',
-     'End-to-end run over the fixtures, no container needed'),
-    ('`tools/highlight-docx.py <f.docx> [--apply]`',
-     'Re-colours command blocks in the operating documents that lost their highlighting'),
+     'End-to-end closed→open→closed cycle against a throwaway project, using '
+     'synthetic fixtures. Needs the container, and refuses if one is already '
+     'open rather than closing someone else\'s. **Operator only** — `case-open` '
+     'blocks while any Claude session is running, so this cannot run in one'),
+    ('`tools/highlight-docx.py <f.docx> [--apply] [--strict]`',
+     'Re-colours command blocks in the operating documents that lost their highlighting. `--strict` also repaints blocks that merely differ from the rules, which is mostly churn against hand-tuned ones'),
     ('`tools/gen-docs.py [--apply]`',
      'Writes the tables in CLAUDE.md and the manual from lib/registry.py. '
      'Run by the pre-commit hook, which refuses a commit where they have drifted'),
