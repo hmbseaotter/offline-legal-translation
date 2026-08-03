@@ -34,9 +34,19 @@ USAGE
 
   ocr-check.py <file.pdf> [--pages 2] [--no-vision]
 
-Vision costs about 6.7 minutes a page and Tesseract seconds, so two pages is
-roughly a quarter of an hour. --no-vision gives the Tesseract-only view in
-seconds, which is enough to spot catastrophic OCR.
+Vision costs about 3 minutes a page and Tesseract seconds, so two pages is
+under ten minutes. --no-vision gives the Tesseract-only view in seconds,
+which is enough to spot catastrophic OCR.
+
+That 3 minutes is measured, and it replaces two earlier estimates that were
+both wrong in ways worth recording. The first, 6.7 minutes, was qwen3.6
+before the model changed. The second, 30 seconds, came from timing a sparse
+synthetic test page: deepseek-ocr transcribes, so its runtime tracks how
+much text is on the page, and a 119-word fixture said nothing useful about a
+560-word A4 scan. Eight real pages ran 92-193 seconds. Estimates taken from
+fixtures do not survive contact with the corpus, so the tool now prints wall
+clock -- start stamp, per-page total, and a run total with a per-page mean --
+rather than asking anyone to trust a figure in a docstring.
 """
 import argparse
 import base64
@@ -196,8 +206,82 @@ def vision(img):
     return re.sub(r"<think>.*?</think>", "", "".join(parts), flags=re.S)
 
 
+def nums_seq(s):
+    """Every number on the page, digits only, in the order they appear.
+
+    Order matters for reconcile(): a number one engine split into two is
+    two ADJACENT tokens in that engine's sequence, and adjacency is the
+    evidence that they were one number.
+    """
+    return [d for d in (re.sub(r"\D", "", m) for m in NUM_RE.findall(s)) if d]
+
+
 def nums(s):
-    return {re.sub(r"\D", "", m) for m in NUM_RE.findall(s) if re.sub(r"\D", "", m)}
+    return set(nums_seq(s))
+
+
+def reconcile(only_t, only_v, t_seq, v_seq):
+    """Separate "the two engines read different numbers" from "the two engines
+    wrote the same number differently".
+
+    WHY THIS EXISTS
+
+    The raw set difference over-reports, and it does so worst on exactly the
+    pages where the answer matters. A real page reported 37 agreed, 14 only
+    tesseract, 14 only vision. Fourteen of each is not twenty-eight
+    independent misreads; it is fourteen amounts written two ways. NUM_RE
+    requires a number to end in a digit, so "12.450,00" is one token and
+    yields 1245000, but "12.450, 00" -- the same amount with one stray space
+    from the scan -- is two tokens yielding 12450 and 00. One spacing
+    difference thus manufactures one entry in EACH column, which is where the
+    symmetry comes from.
+
+    Left uncorrected this inflates the disagreement count on the pages used
+    to decide whether the vision pass earns its three minutes, and sends a
+    reviewer to check numbers that were never in doubt.
+
+    Only two explanations are accepted, both exact:
+
+      split/merge  - consecutive tokens in one engine concatenate to a single
+                     token in the other
+      zero padding - the same digits differing only in leading zeros
+
+    Everything else stays genuine. The bias is deliberate: calling a real
+    misread "formatting" would hide the one error class spellcheck cannot
+    catch, since a wrong digit is a perfectly well-formed word.
+    """
+    ot, ov = set(only_t), set(only_v)
+    pairs = []
+
+    for whole_set, other_set, seq, t_side in ((ot, ov, v_seq, True),
+                                              (ov, ot, t_seq, False)):
+        for whole in sorted(whole_set, key=len, reverse=True):
+            if whole not in whole_set:
+                continue
+            for i in range(len(seq)):
+                for k in (2, 3):
+                    parts = seq[i:i + k]
+                    if (len(parts) == k and "".join(parts) == whole
+                            and all(p in other_set for p in parts)):
+                        whole_set.discard(whole)
+                        for pt in parts:
+                            other_set.discard(pt)
+                        j = " + ".join(parts)
+                        pairs.append((whole, j) if t_side else (j, whole))
+                        break
+                else:
+                    continue
+                break
+
+    for x in sorted(ot):
+        for y in sorted(ov):
+            if x.lstrip("0") == y.lstrip("0") and x.lstrip("0"):
+                ot.discard(x)
+                ov.discard(y)
+                pairs.append((x, y))
+                break
+
+    return pairs, sorted(ot), sorted(ov)
 
 
 def main():
@@ -225,13 +309,15 @@ def main():
                      f"Either pull it or run with --no-vision.")
         print(f"  Tesseract runs in seconds. The vision pass with "
               f"{VISION_MODEL}")
-        print(f"  takes about 30 seconds a page once loaded, and only runs "
+        print(f"  takes about 3 minutes a page on a full one, and only runs "
               f"where")
         print(f"  Tesseract was unsure (--gate {a.gate:.0f}%). --no-vision "
               f"skips it entirely.\n")
 
     tmp = tempfile.mkdtemp(prefix="ocrchk-")
     try:
+        run_t0 = time.time()
+        print(f"  started {time.strftime('%H:%M:%S')}   {os.path.basename(a.pdf)}")
         imgs = render(a.pdf, a.pages, tmp)
         if not imgs:
             sys.exit("could not render any page - is this a PDF?")
@@ -240,7 +326,9 @@ def main():
         gated = 0
         for n, img in enumerate(imgs, 1):
             p = os.path.join(tmp, img)
-            t0 = time.time()
+            page_t0 = time.time()
+            print(f"  page {n}   started {time.strftime('%H:%M:%S')}")
+            t0 = page_t0
             t_txt = tesseract(p)
             t_secs = time.time() - t0
             open(os.path.join(out, f"{stem}-p{n}-tesseract.txt"), "w",
@@ -248,7 +336,6 @@ def main():
 
             tw = len(t_txt.split())
             td = sum(t_txt.count(c) for c in DIACRITICS)
-            print(f"  page {n}")
             print(f"    tesseract   {tw:>5} words  {len(nums(t_txt)):>4} numbers"
                   f"  {td:>4} diacritics   {t_secs:>5.0f}s")
 
@@ -272,6 +359,7 @@ def main():
                           f" Mark them [ILLEGIBLE] rather than translate them.")
 
             if a.no_vision:
+                print(f"    page total  {(time.time() - page_t0) / 60:.1f} min")
                 print()
                 continue
 
@@ -287,6 +375,7 @@ def main():
                 print(f"                Tesseract is confident here. --gate 0 "
                       f"to check anyway.")
                 gated += 1
+                print(f"    page total  {(time.time() - page_t0) / 60:.1f} min")
                 print()
                 continue
 
@@ -301,13 +390,15 @@ def main():
                 print(f"                The first page includes the model "
                       f"load.", flush=True)
             else:
-                print(f"    vision      reading page {n}, about 30 seconds.",
+                print(f"    vision      reading page {n}.",
                       flush=True)
             t0 = time.time()
             try:
                 v_txt = vision(p)
             except Exception as e:
-                print(f"    vision      FAILED: {type(e).__name__}\n")
+                print(f"    vision      FAILED: {type(e).__name__}")
+                print(f"    page total  {(time.time() - page_t0) / 60:.1f} min")
+                print()
                 continue
             v_secs = time.time() - t0
             open(os.path.join(out, f"{stem}-p{n}-vision.txt"), "w",
@@ -318,19 +409,30 @@ def main():
             print(f"    vision      {vw:>5} words  {len(nums(v_txt)):>4} numbers"
                   f"  {vd:>4} diacritics   {v_secs:>5.0f}s")
 
-            tn, vn = nums(t_txt), nums(v_txt)
+            t_seq, v_seq = nums_seq(t_txt), nums_seq(v_txt)
+            tn, vn = set(t_seq), set(v_seq)
             both, only_t, only_v = tn & vn, tn - vn, vn - tn
+            fmt, real_t, real_v = reconcile(only_t, only_v, t_seq, v_seq)
             sim = difflib.SequenceMatcher(
                 None, re.sub(r"\s+", " ", t_txt).strip().lower(),
                 re.sub(r"\s+", " ", v_txt).strip().lower()).ratio()
             print(f"    agreement   {sim:.0%} of the text")
             print(f"    numbers     {len(both)} agreed, "
-                  f"{len(only_t)} only tesseract, {len(only_v)} only vision")
-            if only_t or only_v:
-                print(f"                ^ every one of these is a number one "
-                      f"engine read and the other did not.")
-                print(f"                  Check them against the page. They are "
-                      f"case numbers, dates and amounts.")
+                  f"{len(real_t)} only tesseract, {len(real_v)} only vision")
+            if fmt:
+                print(f"                {len(fmt)} further difference(s) are "
+                      f"the same number written two ways")
+                print(f"                  (a separator or space read "
+                      f"differently) and are not errors.")
+            if real_t or real_v:
+                print(f"                ^ these are numbers one engine read "
+                      f"and the other did not,")
+                print(f"                  with no formatting explanation. "
+                      f"Check them against the page:")
+                print(f"                  they are case numbers, dates and "
+                      f"amounts, and spellcheck")
+                print(f"                  will never flag a wrong digit.")
+            print(f"    page total  {(time.time() - page_t0) / 60:.1f} min")
             print()
     finally:
         subprocess.run(["rm", "-rf", tmp], capture_output=True)
@@ -341,6 +443,10 @@ def main():
         print(f"  On a corpus this is where the time is saved - the "
               f"expensive read runs only")
         print(f"  where the cheap one is unsure.\n")
+    mins = (time.time() - run_t0) / 60
+    print(f"  finished {time.strftime('%H:%M:%S')} - {mins:.1f} min for "
+          f"{len(imgs)} page(s), {mins / max(1, len(imgs)):.1f} min each")
+    print()
     print(f"  transcriptions written to {out}")
     print("  Read them against the page images. What matters is not the word")
     print("  count but whether the numbers, names and diacritics are right.")
