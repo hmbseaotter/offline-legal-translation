@@ -72,22 +72,21 @@ OCR_LANGS = os.environ.get("TR_OCR_LANGS", "slv+eng")
 NUM_RE = re.compile(r"\d[\d.,:/-]*\d|\d")
 DIACRITICS = "čšžćđČŠŽĆĐ"
 
-PROMPT_FULL = ("Transcribe all text in this document image exactly as it "
-               "appears. Preserve line breaks, diacritics, numbers and "
-               "punctuation. Output only the transcription.")
+# The model's own documented prompt, and terse on purpose. DeepSeek-OCR is a
+# transcription model, not an instruction-follower: asked to "list every
+# number visible - dates, case numbers, amounts..." it returned 23 words, one
+# number and no diacritics on a page Tesseract read in full. Given "Extract
+# the text in the image." it transcribed the whole page in 29 seconds.
+#
+# So numbers are pulled out of the transcription in code, where they were
+# always going to be compared anyway. The numbers-only prompt existed to save
+# generation time on a 36B model at 0.3 tokens/sec; at 3B the whole page costs
+# half a minute and the optimisation bought nothing but a broken read.
+#
+# Not the <|grounding|> variant: it emits bounding-box coordinates, which read
+# as document numbers and would manufacture disagreements out of geometry.
+PROMPT = os.environ.get("TR_VISION_PROMPT", "Extract the text in the image.")
 
-# The cheap question. Only number disagreements are acted on, and generation
-# is what the wall clock is made of: a real page produced ~500 words of
-# transcription in 45 minutes on the 36B model, where its numbers alone would
-# have been a tenth of that. Asking for the whole page in order to compare a
-# fiftieth of it was the wrong trade.
-PROMPT_NUMBERS = ("List every number visible in this document image - dates, "
-                  "case numbers, reference numbers, amounts, quantities, "
-                  "percentages. One per line, exactly as printed, including "
-                  "any punctuation inside the number. No other text, no "
-                  "commentary, no headings.")
-
-NUMBERS_ONLY = True     # cleared by --full
 
 
 def render(pdf, pages, tmp):
@@ -146,7 +145,7 @@ def vision(img):
         b64 = base64.b64encode(fh.read()).decode()
     body = json.dumps({
         "model": VISION_MODEL,
-        "prompt": PROMPT_NUMBERS if NUMBERS_ONLY else PROMPT_FULL,
+        "prompt": PROMPT,
         "images": [b64], "stream": True,
         "options": {"temperature": 0.1, "num_ctx": 8192}}).encode()
     req = urllib.request.Request(OLLAMA + "/api/generate", body,
@@ -154,9 +153,15 @@ def vision(img):
 
     started = time.time()
     first = threading.Event()
+    # Carriage-return progress belongs on a terminal. Piped or redirected --
+    # which is how output gets captured to paste back -- every \r lands as
+    # literal text and the run reads as one smeared line.
+    live = sys.stdout.isatty()
 
     def waiting():
         while not first.wait(30):
+            if not live:
+                continue
             sys.stdout.write(f"\r                loading / prefilling, "
                              f"{time.time() - started:.0f}s elapsed   ")
             sys.stdout.flush()
@@ -172,11 +177,12 @@ def vision(img):
                 d = json.loads(line)
                 if not first.is_set():
                     first.set()
-                    sys.stdout.write(f"\r                first token after "
+                    if live:
+                        sys.stdout.write(f"\r                first token after "
                                      f"{time.time() - started:.0f}s, reading   ")
                 parts.append(d.get("response", ""))
                 n += 1
-                if n % 20 == 0:
+                if live and n % 20 == 0:
                     sys.stdout.write(f"\r                {n} tokens, "
                                      f"{time.time() - started:.0f}s        ")
                     sys.stdout.flush()
@@ -184,8 +190,9 @@ def vision(img):
                     break
     finally:
         first.set()
-        sys.stdout.write("\r" + " " * 70 + "\r")
-        sys.stdout.flush()
+        if live:
+            sys.stdout.write("\r" + " " * 70 + "\r")
+            sys.stdout.flush()
     return re.sub(r"<think>.*?</think>", "", "".join(parts), flags=re.S)
 
 
@@ -198,17 +205,11 @@ def main():
     ap.add_argument("pdf")
     ap.add_argument("--pages", type=int, default=2)
     ap.add_argument("--no-vision", action="store_true")
-    ap.add_argument("--full", action="store_true",
-                    help="ask the vision model for the whole page rather than "
-                         "just its numbers. Far slower; only number "
-                         "disagreements are acted on")
     ap.add_argument("--gate", type=float, default=6.0,
                     help="skip the vision pass where fewer than this percent "
                          "of Tesseract words were doubtful (default 6). "
                          "0 disables the gate")
     a = ap.parse_args()
-    global NUMBERS_ONLY
-    NUMBERS_ONLY = not a.full
 
     if not os.path.isfile(a.pdf):
         sys.exit(f"no such file: {a.pdf}")
@@ -224,7 +225,7 @@ def main():
                      f"Either pull it or run with --no-vision.")
         print(f"  Tesseract runs in seconds. The vision pass with "
               f"{VISION_MODEL}")
-        print(f"  takes roughly 1.5 minutes a page once loaded, and only runs "
+        print(f"  takes about 30 seconds a page once loaded, and only runs "
               f"where")
         print(f"  Tesseract was unsure (--gate {a.gate:.0f}%). --no-vision "
               f"skips it entirely.\n")
@@ -300,7 +301,7 @@ def main():
                 print(f"                The first page includes the model "
                       f"load.", flush=True)
             else:
-                print(f"    vision      reading page {n}, about 7 minutes.",
+                print(f"    vision      reading page {n}, about 30 seconds.",
                       flush=True)
             t0 = time.time()
             try:
