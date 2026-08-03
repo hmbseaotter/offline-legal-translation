@@ -52,8 +52,19 @@ ls /usr/share/hunspell/sl_SI.dic >/dev/null 2>&1 && ok "dictionaries present" \
                                                  || bad "hunspell dicts missing - tr-setup"
 (( fail )) && { echo; echo "Fix the above, then re-run."; exit 1; }
 
+# tr-project prints "active:    (none set)" when nothing is selected, and
+# $2 of that is the literal "(none". Left unchecked the script went on to
+# report "no .../(none/source/phase1/mt", which names the wrong problem:
+# the missing thing is the project, not the directory.
 ROOT="$(tr-project 2>/dev/null | awk '/^active:/{print $2}')"
-SRC="$MNT/${ROOT:-}/source"
+if [ -z "$ROOT" ] || [ "$ROOT" = "(none" ]; then
+  echo "  STOP  no active project. Pick one first:"
+  echo "          tr-project              # list them"
+  echo "          tr-project <name>       # select one"
+  exit 1
+fi
+ok "active project: $ROOT"
+SRC="$MNT/$ROOT/source"
 [ -d "$SRC/phase1/mt" ] || { echo "  STOP  no $SRC/phase1/mt"; exit 1; }
 [ -d "$SRC/phase1/scratch" ] || { echo "  STOP  no $SRC/phase1/scratch"; exit 1; }
 nmt=$(find "$SRC/phase1/mt" -type f | wc -l)
@@ -86,9 +97,17 @@ cat <<'EOF'
   a misread digit in a date or an amount arrives looking entirely correct.
 
   Open each text layer against its page images and check the things OCR
-  actually gets wrong -- names, dates, case numbers, amounts, and the
-  characters c-caron, s-caron and z-caron. Mangled diacritics still form
-  valid Slovene words, so no spellcheck will catch them.
+  actually gets wrong: names, dates, case numbers and amounts above all.
+
+  Numbers are the priority because nothing downstream can catch them. A
+  dropped caron usually leaves a non-word that Slovene spellcheck flags,
+  and only a few pairs are both real words -- but a misread digit is a
+  perfectly well-formed token, so no checker will ever question it. Words
+  Tesseract could not read at all are already marked OCR_ILLEGIBLE.
+
+  For a page whose numbers matter, read it twice by two engines instead:
+
+      tools/ocr-check.py <file.pdf> --pages 2
 
       work/ocr/<name>.txt        the text the translation will be built on
       work/ocr/<name>.ocr.pdf    the same pages with that text behind them
