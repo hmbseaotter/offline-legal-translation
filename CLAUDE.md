@@ -126,7 +126,7 @@ flattens the tree.
 | TR_SRC / TR_TGT     | sl / en                                  | Per-project, in project.conf. Use de for German                                      |
 | TR_SUFFIX           | (empty)                                  | Per-project, in project.conf. Set if the client requires it                          |
 | TR_NUM_CTX          | 8192                                     | Context window. Lower if memory is tight                                             |
-| TR_PROMPT_VERSION   | v4                                       | Part of the cache key. Bump to force retranslation                                   |
+| TR_PROMPT_VERSION   | v5                                       | Part of the cache key. Bump to force retranslation                                   |
 | TR_OCR_LANGS        | slv+eng                                  | Tesseract languages. Add deu for German                                              |
 | TR_OLLAMA           | http://127.0.0.1:11434                   | Ollama endpoint                                                                      |
 | TR_DICTS            | /usr/share/hunspell                      | Where tr-inventory looks for the hunspell word lists it detects language with        |

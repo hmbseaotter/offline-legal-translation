@@ -16,8 +16,12 @@ Rules:
   Use one date format throughout; never switch mid-document.
 - Never alter a numeric value. Formatting may follow {TGT} convention;
   the quantity, date, or time denoted must be identical.
-- If a passage is illegible or garbled, output OCR_ILLEGIBLE in its place
-  rather than guessing what it might have said.
+- The source may already contain the token OCR_ILLEGIBLE, put there by the
+  scanner where it could not read a word. Copy it through unchanged and in
+  place. Never introduce it anywhere else: text that reaches you without
+  that marker was read successfully, however fragmentary it looks. Short
+  labels, postal codes, addresses, column headings and isolated figures are
+  normal in these documents and must be translated, not discarded.
 - Match the formal register of legal documents.
 
 {GLOSSARY}
