@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tr-lint - deterministic checks over the translation memory and outputs.
 
-Usage:  tr-lint [--tsv report.tsv]
+Usage:  tr-lint [--tsv report.tsv] [--all-versions]
 
 Runs no model. Takes seconds. Catches the error classes a language model is
 structurally worst at noticing. The output is a prioritized worklist for the

@@ -105,7 +105,13 @@ flattens the tree.
 | `tr-status` | Diff `source/` against `translated/` |
 | `tr-run [-n] [--all] [file]` | Batch translate; resumable. Without `--all`, only what the inventory matched |
 | `tr-docx` / `tr-xlsx` / `tr-pdf` / `tr-txt` | Per-format workers. `tr-xlsx` also takes `.xlsm` / `.xltx` / `.xltm`, all delivered as `.xlsx` — the translation carries no macros and should not claim to |
-| `tr-lint` | Deterministic checks over the memory |
+| `tr-lint [--tsv F] [--all-versions]` | Deterministic checks over the memory. Runs no model. Scoped to the current model and prompt version unless `--all-versions` |
+| `tr-ocrtext <in.pdf> <out.txt>` | Text layer that keeps Tesseract's per-word confidence and writes `OCR_ILLEGIBLE` below the floor. `tr-pdf` calls it instead of `pdftotext` |
+| `tools/ocr-check.py <f.pdf> [--pages N] [--gate PCT] [--no-vision]` | Reads pages with Tesseract *and* a vision model and compares the numbers. Prints counts only, never document text. **Operator only** |
+| `tools/phase1-setup.sh` | Prepares the Phase 1 comparison on a real subset; stops for OCR verification. **Operator only** |
+| `case-guard-desktop [--check]` | The same refusal for the desktop app, which never consults `PATH`. Installed by `tools/install-desktop-guard.sh` |
+| `tools/cycle-test.sh` | End-to-end run over the fixtures, no container needed |
+| `tools/highlight-docx.py <f.docx> [--apply]` | Re-colours command blocks in the operating documents that lost their highlighting |
 
 ## Design invariants
 
