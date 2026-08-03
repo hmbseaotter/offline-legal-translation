@@ -9,6 +9,11 @@
 set -uo pipefail
 MAP="${CASE_MAP:-casedata}"
 MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
+# Defined here because the closing message names the container file. It was
+# not, and under `set -u` that made case-close exit non-zero on its last two
+# lines -- after a successful unmount, so the container was safely closed but
+# the script that had just been reworded to reassure ended in an error.
+IMG="${CASE_IMG:-$HOME/.case/confidential.luks}"
 FORCE=0; [[ "${1:-}" == "-f" ]] && FORCE=1
 
 if ! mountpoint -q "$MNT"; then
