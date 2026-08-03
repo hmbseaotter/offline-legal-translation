@@ -112,10 +112,56 @@ cat <<'EOF'
       work/ocr/<name>.txt        the text the translation will be built on
       work/ocr/<name>.ocr.pdf    the same pages with that text behind them
 
-  If the OCR is poor, stop. Translating it measures Tesseract, not the
-  pipeline, and burns the translator's time on damage that is cheaper to fix
-  upstream.
+  "Poor" is not a judgement call. tr-ocrtext counts the tokens Tesseract
+  scored below its confidence floor and marks them OCR_ILLEGIBLE, and
+  ocr-check.py compares two engines on the numbers. Read against these:
+
+      unreadable tokens        under 5%    proceed
+      (tr-ocrtext)             5 - 20%     look at the marked pages first
+                               20% or more stop; rescan or get better copies
+
+      doubtful words           under 3%    proceed
+      (ocr-check.py)           3 - 10%     run the vision cross-check
+                               over 10%    stop
+
+      number disagreements     any at all  a person reads THAT page against
+      (ocr-check.py)                       the original, whatever the rates say
+
+  The last one is deliberately not a percentage. A page can be 99% clean and
+  still carry one wrong digit in an amount, and no later stage can catch it,
+  so it is not a reason to stop the project -- it is a page that gets read.
+
+  The first two thresholds come from eight pages of two real documents. They
+  are starting points with a stated basis, not laws; move them as the corpus
+  says.
 EOF
+
+# The measured rate for each file, printed where the decision is made rather
+# than left for the operator to derive. The text layers are already cached by
+# the counting pass above, so this costs nothing.
+echo "  This drop, measured:"
+for f in "$SRC"/phase1/mt/* "$SRC"/phase1/scratch/*; do
+  [ -f "$f" ] || continue
+  case "${f,,}" in *.pdf) ;; *) continue ;; esac
+  rel="${f#"$SRC/"}"; rel="${rel%.*}"
+  txt="$MNT/$ROOT/work/ocr/${rel//\//__}.txt"
+  if [ ! -f "$txt" ]; then
+    printf '    %-46s not yet OCR'"'"'d\n' "$(basename "$f" | cut -c1-46)"
+    continue
+  fi
+  tot=$(wc -w < "$txt")
+  nbad=$(grep -o OCR_ILLEGIBLE "$txt" 2>/dev/null | wc -l)
+  if [ "$tot" -gt 0 ]; then
+    pct=$(( nbad * 100 / tot ))
+    if   [ "$pct" -ge 20 ]; then verdict="STOP - a fifth unreadable"
+    elif [ "$pct" -ge 5  ]; then verdict="look at the marked pages"
+    else                         verdict="proceed"
+    fi
+    printf '    %-46s %3d%% unreadable  %s\n' \
+           "$(basename "$f" | cut -c1-46)" "$pct" "$verdict"
+  fi
+done
+
 printf '\n  Continue to drafting? [y/N] '
 read -r ans
 [[ "${ans,,}" == "y" ]] || { echo "  stopped before drafting - nothing wasted"; exit 0; }
