@@ -83,10 +83,14 @@ def main():
     # where the source form beside every entry would be noise. If a matter
     # needs it in a table, it is a manual edit on the deliverable.
     gloss = trlib.load_glossary()
-    mapping = {}
-    for i, s in enumerate(uniq, 1):
-        mapping[s] = trlib.ollama_translate(s, a.src, a.tgt, gloss)
-        trlib.progress(i, len(uniq), s[:48])
+    # Batched. Cells are the strongest case for it: each is independent, most
+    # are a few words, and a run of 370 of them cost 22,075 seconds one at a
+    # time -- a minute each for strings a person reads in a second, because
+    # the per-call prefill dwarfs the generation.
+    vals = trlib.ollama_translate_many(
+        uniq, a.src, a.tgt, gloss,
+        report=lambda d, n, t: trlib.progress(d, n, t[:48]))
+    mapping = dict(zip(uniq, vals))
 
     for cell in targets:
         v = cell.value.strip()

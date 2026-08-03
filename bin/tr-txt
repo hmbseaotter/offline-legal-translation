@@ -39,12 +39,17 @@ def main():
     # Per document, as in tr-docx: first mention in this file, not the run.
     first = trlib.FirstMention(f"{a.src}-{a.tgt}")
 
-    n = 0
+    # Translated in one pass so short segments can be grouped, then walked in
+    # document order. FirstMention still sees them in order, which is what it
+    # needs: it brackets the first occurrence in THIS document.
+    done = trlib.ollama_translate_many(
+        todo, a.src, a.tgt, gloss,
+        report=lambda d, n, t: trlib.progress(d, n, t[:48]))
+    bysrc = dict(zip(todo, done))
+
     for u in units:
         if trlib.is_translatable(u):
-            n += 1
-            out = first.apply(trlib.ollama_translate(u, a.src, a.tgt, gloss))
-            trlib.progress(n, len(todo), u[:48])
+            out = first.apply(bysrc[u])
         else:
             out = u
         if a.bilingual:

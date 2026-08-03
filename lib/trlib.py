@@ -837,6 +837,151 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     print(f"  ! translation failed after {retries} tries: {last}", file=sys.stderr)
     return f"[TRANSLATION FAILED] {text}"
 
+# Batching thresholds. Deliberately conservative: a batch that comes back
+# misaligned is worse than a slow run, so only short single-line segments are
+# grouped, and any doubt falls back to one call per segment.
+BATCH_MAX_ITEMS = int(os.environ.get("TR_BATCH_ITEMS", "20"))
+BATCH_MAX_CHARS = int(os.environ.get("TR_BATCH_CHARS", "1500"))
+BATCH_ITEM_CHARS = int(os.environ.get("TR_BATCH_ITEM_CHARS", "200"))
+
+_NUMBERED = re.compile(r"^\s*(\d+)\s*[.)]\s?(.*)$")
+
+
+def _batchable(t):
+    """Short, single-line, and free of the numbering we use as the frame."""
+    return ("\n" not in t and len(t) <= BATCH_ITEM_CHARS
+            and not _NUMBERED.match(t))
+
+
+def _translate_batch(texts, src_lang, tgt_lang, gloss):
+    """One request for several segments. Returns a list, or None if the
+    reply did not line up exactly with the input.
+
+    Returning None rather than a best guess is the whole safety property:
+    a silently misaligned batch would attach every translation to the wrong
+    cell, and nothing downstream could detect it -- each segment would look
+    like a perfectly good translation of some other segment.
+    """
+    gb = glossary_block("\n".join(texts), gloss or [])
+    numbered = "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1))
+    payload = {
+        "model": MODEL,
+        # Same system prompt as the single-segment path, so both share one
+        # cache namespace and one set of rules. The batch framing goes in the
+        # user turn.
+        "system": build_prompt(src_lang, tgt_lang, gb),
+        "prompt": ("Translate each numbered line separately. Reply with the "
+                   "same numbers in the same order, one translation per line, "
+                   "and nothing else.\n\n" + numbered),
+        "stream": False,
+        "options": {"temperature": 0.1, "top_p": 0.9, "num_ctx": NUM_CTX},
+    }
+    req = urllib.request.Request(
+        OLLAMA + "/api/generate", data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=1800) as r:
+            out = json.loads(r.read())["response"].strip()
+    except Exception:
+        return None
+    out = re.sub(r"^```.*?\n|```$", "", out, flags=re.S).strip()
+
+    got = {}
+    for ln in out.splitlines():
+        m = _NUMBERED.match(ln)
+        if m:
+            idx = int(m.group(1))
+            if idx in got:                 # repeated number: cannot trust it
+                return None
+            got[idx] = m.group(2).strip()
+    if set(got) != set(range(1, len(texts) + 1)):
+        return None
+    if any(not v for v in got.values()):
+        return None
+    return [got[i] for i in range(1, len(texts) + 1)]
+
+
+def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
+    """Translate a list of segments, grouping the short ones.
+
+    WHY
+
+    Measured on a real run: 370 spreadsheet cells took 22,075 seconds, 59.7
+    each, for strings like a name and a month. That is not generation -- it
+    is a fixed per-call cost of about a minute, paid in full by an eight
+    token cell, because every call re-prefills the system prompt on a
+    memory-bandwidth-bound 12B model. One spreadsheet was 67% of a nine hour
+    run.
+
+    Grouping twenty short segments into one request pays that cost once
+    instead of twenty times. Long or multi-line segments are left alone:
+    they have real generation cost to amortise against, and they are the
+    ones most likely to confuse the numbering.
+
+    Every result is still cached individually, so a bumped prompt version or
+    an interrupted run loses nothing extra, and tr-lint sees exactly what it
+    saw before.
+    """
+    direction = f"{src_lang}-{tgt_lang}"
+    out = [None] * len(texts)
+    pending = []
+
+    for i, t in enumerate(texts):
+        if not is_translatable(t):
+            out[i] = localize(t, src_lang, tgt_lang)
+            continue
+        cached = tm_get(t, direction)
+        if cached is not None:
+            out[i] = cached
+            continue
+        pending.append(i)
+
+    done = len(texts) - len(pending)
+    batch = []
+
+    def flush():
+        nonlocal batch, done
+        if not batch:
+            return
+        idxs = batch
+        batch = []
+        got = _translate_batch([texts[i] for i in idxs], src_lang, tgt_lang, gloss)
+        if got is None:
+            # Misaligned or failed: redo this group one at a time. Slower for
+            # this group only, and correct.
+            for i in idxs:
+                out[i] = ollama_translate(texts[i], src_lang, tgt_lang, gloss)
+                done += 1
+                if report:
+                    report(done, len(texts), texts[i])
+            return
+        for i, tr in zip(idxs, got):
+            out[i] = tr
+            tm_put(texts[i], tr, direction)
+            done += 1
+            if report:
+                report(done, len(texts), texts[i])
+
+    chars = 0
+    for i in pending:
+        t = texts[i]
+        if not _batchable(t):
+            flush()
+            out[i] = ollama_translate(t, src_lang, tgt_lang, gloss)
+            done += 1
+            if report:
+                report(done, len(texts), t)
+            continue
+        if batch and (len(batch) >= BATCH_MAX_ITEMS
+                      or chars + len(t) > BATCH_MAX_CHARS):
+            flush()
+            chars = 0
+        batch.append(i)
+        chars += len(t)
+    flush()
+    return out
+
+
 def progress(i, n, label=""):
     pct = 100.0 * i / n if n else 100.0
     sys.stderr.write(f"\r  {i}/{n} ({pct:.0f}%) {label[:50]:<50}")
