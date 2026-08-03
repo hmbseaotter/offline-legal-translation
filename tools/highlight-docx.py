@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """highlight-docx.py - colour the command blocks in the operating documents.
 
-Usage:  highlight-docx.py <file.docx> [more.docx ...] [--apply]
+Usage:  highlight-docx.py <file.docx> [more.docx ...] [--apply] [--strict]
 
 Without --apply it reports what it would change and writes nothing.
 

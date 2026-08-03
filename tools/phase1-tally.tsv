@@ -50,9 +50,13 @@ other		Anything that fits none of the above - describe it
 # A poor ratio driven by the ocr row is not a verdict on translation. It says
 # the text going in is damaged, and the fixes live upstream: better scanning,
 # different OCR settings, or a second OCR engine cross-checking the first.
-# The vision model already transcribes a clean page at 97.3% with every case
-# number, amount, date and diacritic exact, so that cross-check is available
-# and untested on real scans.
+# That cross-check exists and has been run on real scans: tools/ocr-check.py
+# reads the same pages with Tesseract and deepseek-ocr:3b and compares the
+# numbers. Over eight pages of two scanned documents the two engines agreed
+# on every number on seven of them, and disagreed on fourteen on the eighth
+# -- which was also the page Tesseract itself was least sure of. It costs
+# about 3 minutes a page, so --gate runs it only where Tesseract's own
+# confidence is low.
 #
 # Also worth timing, separately from translation: how long it takes to read
 # an OCR text layer against its page and correct it. On an all-scanned corpus

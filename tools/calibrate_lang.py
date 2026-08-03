@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """calibrate_lang.py - measure trlang detection accuracy at a given sample length.
 
+Usage:  calibrate_lang.py <corpus-dir> [--lengths 25,40,60,100] [--stride N]
+
+<corpus-dir> holds one subdirectory per language. --lengths sets the sample
+sizes in words to test; --stride steps through each text rather than
+sampling only its start.
+
 The accuracy figures quoted in lib/trlang.py came from a run of this kind
 against UDHR text. The samples themselves are not in this repository -- they
 are third-party text, and the repository holds no corpora -- so the numbers
