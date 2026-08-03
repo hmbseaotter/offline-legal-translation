@@ -25,6 +25,7 @@ page	set	minutes	notes
 #
 class	ticks	what it means
 ocr		The draft was wrong because the OCR was wrong, not the translation. Count these separately or the ratio blames the model for Tesseract. On an all-scanned corpus this is the row to watch
+untranslated		The segment came back in the source language, not translated. tr-lint flags these as ECHO. Most ECHOs on a spreadsheet are names, cities and account codes where passing through is correct - count only the ones that should have been translated. Measured at ~11% of segments on the first real run, so this row is worth its own count rather than being folded into other
 terminology		Right meaning, wrong term. Fixed by one glossary entry, forever
 register		Accurate but reads wrong for a court document
 numbers		A figure, date or case number altered or dropped. tr-lint should have caught these - if you are finding them by eye, say so

@@ -193,6 +193,25 @@ if [ ! -f "$TALLY" ]; then
     || bad "could not create the tally sheet"
 else
   ok "tally sheet already exists, left alone"
+  # Left alone because it holds the operator's counts, which no script gets to
+  # overwrite. But the kit's template gains classes as the corpus teaches us
+  # what to count -- `untranslated` was added after the first real run showed
+  # ~11% of segments coming back in the source language -- and a copy made
+  # earlier silently lacks them. Then the edits land in `other` and the most
+  # actionable finding of the experiment is invisible in the per-class counts.
+  # Report the difference; adding a row is the operator's call.
+  missing=""
+  while IFS=$'\t' read -r cls _rest; do
+    case "$cls" in ""|"#"*|page|class|[0-9]*) continue ;; esac
+    grep -q "^$cls"$'\t' "$TALLY" 2>/dev/null || missing="$missing $cls"
+  done < "$KIT/tools/phase1-tally.tsv"
+  if [ -n "$missing" ]; then
+    echo "  note  the kit template has class(es) this sheet lacks:$missing"
+    echo "        add the row(s) if you want them counted separately:"
+    for cls in $missing; do
+      echo "          awk -F'\\t' '\$1==\"$cls\"' $KIT/tools/phase1-tally.tsv >> $TALLY"
+    done
+  fi
 fi
 
 cat <<EOF
