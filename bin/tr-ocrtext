@@ -37,7 +37,10 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "lib"))
+import trlib  # noqa: E402
 
 MIN_CONF = float(os.environ.get("TR_OCR_MIN_CONF", "40"))
 LANGS = os.environ.get("TR_OCR_LANGS", "slv+eng")
@@ -126,7 +129,10 @@ def main():
               file=sys.stderr)
         return
 
-    tmp = tempfile.mkdtemp(prefix="trocr-")
+    # Inside the container, not /tmp: this renders every page of a scanned
+    # exhibit to a PNG, and /tmp is on the unencrypted root. See
+    # trlib.case_tmpdir.
+    tmp = trlib.case_tmpdir("trocr-")
     try:
         subprocess.run(["pdftoppm", "-png", "-r", "200", a.pdf,
                         os.path.join(tmp, "pg")],

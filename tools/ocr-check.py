@@ -329,7 +329,9 @@ def main():
         print(f"  Tesseract was unsure (--gate {a.gate:.0f}%). --no-vision "
               f"skips it entirely.\n")
 
-    tmp = tempfile.mkdtemp(prefix="ocrchk-")
+    # Inside the container. Page images of evidence do not belong on the
+    # unencrypted root filesystem. See trlib.case_tmpdir.
+    tmp = trlib.case_tmpdir("ocrchk-")
     try:
         run_t0 = time.time()
         print(f"  started {time.strftime('%H:%M:%S')}   {os.path.basename(a.pdf)}")

@@ -197,7 +197,9 @@ def from_pdf(path, allow_ocr=True, limit=SAMPLE_WORDS, full_ocr=False):
         return "", "pdf-needs-ocr"
     if not (shutil.which("pdftoppm") and shutil.which("tesseract")):
         return "", "pdf-needs-ocr"
-    tmp = tempfile.mkdtemp(prefix="trinv-")
+    # Inside the container: the sampling pass renders real pages. See
+    # trlib.case_tmpdir.
+    tmp = trlib.case_tmpdir("trinv-")
     try:
         subprocess.run(["pdftoppm", "-jpeg", "-r", "150", "-f", "1", "-l", "2",
                         path, os.path.join(tmp, "pg")],

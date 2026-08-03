@@ -3,7 +3,7 @@
 Nothing here talks to the network except ollama_translate(), which speaks
 only to http://127.0.0.1:11434 (the local Ollama daemon).
 """
-import os, re, json, sqlite3, hashlib, urllib.request, sys, time
+import os, re, json, sqlite3, hashlib, urllib.request, sys, time, tempfile
 
 # ------------------------------------------------------------ interpreter
 
@@ -236,6 +236,50 @@ def path(*p):
 
 def shared(*p):
     return os.path.join(SHARED, *p)
+
+
+def case_tmpdir(prefix):
+    """A scratch directory that stays inside the encrypted container.
+
+    WHY NOT tempfile.mkdtemp()
+
+    Rendering a scanned page writes a picture of that page out. The plain
+    mkdtemp puts it under TMPDIR, and every source document in this corpus
+    is a scan -- so a full run pushes the entire evidence bundle through
+    that directory as PNGs.
+
+    On this machine /tmp is tmpfs, so those images are not written to the
+    SSD and do not survive a reboot. That is better than it first looks
+    and still not good enough: tmpfs lives in RAM, RAM is swapped under
+    pressure, and the swapfile is 8 GB of plain ext4 on the root
+    filesystem. Memory pressure is not hypothetical here -- the
+    translation model alone is 13 GB and the vision model 23 GB on a 30 GB
+    machine, which is why the setup adds swap in the first place. So the
+    realistic path for a page image onto the persistent disk is through
+    swap, and an unlinked page there is not reliably gone: wear levelling
+    is exactly why the container document says not to trust shred.
+
+    Nor is cleanup guaranteed. Callers remove these directories in a
+    finally, which a hard kill skips -- two renders from an interrupted run
+    were found still sitting in /tmp days later.
+
+    The decisions register does accept "swap, temporary files ... are in
+    the clear" as residual risk. That wording was written imagining an
+    editor's swap file, not a systematic render of every page of every
+    exhibit, and the difference is large enough to close rather than reason
+    past. Inside the container the same images are encrypted at rest and
+    go away with the unmount.
+
+    There is deliberately no fallback. require_root() already refuses with
+    a readable message when no project is selected, and every caller here
+    needs a project anyway. A silent fall back to /tmp -- on a missing
+    project, a full disk, a permissions error -- would restore exactly the
+    exposure this exists to close, at the moment least likely to be
+    noticed. Failing loudly is the point.
+    """
+    base = path("work", "tmp")
+    os.makedirs(base, exist_ok=True)
+    return tempfile.mkdtemp(prefix=prefix, dir=base)
 
 # ---------------------------------------------------------------- segmentation
 
