@@ -39,4 +39,25 @@ sudo cryptsetup luksClose "$MAP"
 sudo chattr +i "$MNT" 2>/dev/null || \
   echo "  note: could not set immutable flag on $MNT (filesystem may not support it)"
 
-echo "closed. $MNT is now empty and locked."
+# The old wording was "$MNT is now empty and locked", which reads as though
+# the work had been thrown away. It had not: closing unmounts a filesystem,
+# it does not delete one. The mountpoint looks empty because nothing is
+# mounted there any more, and everything written during the session is inside
+# the container file, encrypted. Saying where the work went costs two lines
+# and stops the operator wondering whether they have just lost a day.
+used="$(du -h "$IMG" 2>/dev/null | cut -f1)"
+cat <<EOF
+closed and encrypted.
+
+  Your work is safe. It lives inside the container file, not at the
+  mountpoint:
+
+    $IMG   (${used:-?} on disk)
+
+  $MNT looks empty because nothing is mounted
+  there now. Run case-open and it is all back, exactly as you left it.
+  Nothing is deleted by closing -- unmounting a filesystem does not remove
+  what is in it.
+
+  Safe to start Claude Code.
+EOF

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# case-guard-desktop - the same refusal as case-guard, for the desktop app.
+#
+# WHY A SECOND GUARD
+#
+# case-guard shadows `claude` on PATH. The desktop application never consults
+# PATH: it is launched as /usr/bin/claude-desktop from a .desktop entry, and
+# it runs its OWN bundled copy of Claude Code out of
+# ~/.config/Claude/claude-code/<version>/. Nothing on PATH is involved at any
+# point, so case-guard could not see it and never fired.
+#
+# That left exactly one hole in the mutual exclusion, and it is the one that
+# actually happened: case-open refuses to mount while Claude runs, so opening
+# first and launching second was covered -- but opening the container and THEN
+# starting the desktop app was not.
+#
+# INSTALL
+#
+#   mkdir -p ~/.local/sbin ~/.local/share/applications
+#   cp case-guard-desktop ~/.local/sbin/
+#   chmod +x ~/.local/sbin/case-guard-desktop
+#   # then the .desktop override, which is what the launcher actually reads:
+#   tools/install-desktop-guard.sh
+#
+# A user .desktop file shadows the system one of the same name, so the
+# launcher, the dock and the URI handler all go through here.
+#
+# There is no terminal behind a GUI launch, so a refusal has to be visible on
+# screen: kdialog if present, notify-send otherwise, and a log line either way.
+
+set -uo pipefail
+MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
+REAL="${CLAUDE_DESKTOP_BIN:-/usr/bin/claude-desktop}"
+
+if mountpoint -q "$MNT" 2>/dev/null; then
+  TITLE="Claude blocked: the case container is open"
+  BODY="Case material is mounted at
+$MNT
+
+Claude Code sends context to Anthropic's servers. It must not run while the
+container is open.
+
+Close it first:   case-close
+Then start Claude again."
+
+  if command -v kdialog >/dev/null 2>&1; then
+    kdialog --title "$TITLE" --error "$BODY" 2>/dev/null
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send -u critical "$TITLE" "$BODY" 2>/dev/null
+  fi
+  logger -t case-guard-desktop "blocked: $MNT is mounted" 2>/dev/null || true
+  echo "BLOCKED: $MNT is mounted. Run case-close first." >&2
+  exit 3
+fi
+
+exec "$REAL" "$@"
