@@ -16,7 +16,7 @@ Rules:
   Use one date format throughout; never switch mid-document.
 - Never alter a numeric value. Formatting may follow {TGT} convention;
   the quantity, date, or time denoted must be identical.
-- If a passage is illegible or garbled, output [ILLEGIBLE] in its place
+- If a passage is illegible or garbled, output OCR_ILLEGIBLE in its place
   rather than guessing what it might have said.
 - Match the formal register of legal documents.
 

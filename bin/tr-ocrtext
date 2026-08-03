@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tr-ocrtext - OCR text layer with unreadable tokens marked [ILLEGIBLE].
+"""tr-ocrtext - OCR text layer with unreadable tokens marked OCR_ILLEGIBLE.
 
 Usage:  tr-ocrtext <input.pdf> <output.txt>
 
@@ -15,7 +15,7 @@ Every source is a scan of prosecution evidence, and the forms in it are
 filled in by hand. Handwriting does not fail loudly: Tesseract emits
 plausible-looking words rather than nothing, the model translates them
 fluently, and a scrawled amount arrives in the deliverable as a confident
-figure with nothing marking it as invented. Marking it [ILLEGIBLE] turns a
+figure with nothing marking it as invented. Marking it OCR_ILLEGIBLE turns a
 silent fabrication into a visible instruction to go and read the page.
 
 Measured on a page mixing print with one scrawled line: the scrawl scored
@@ -41,7 +41,13 @@ import tempfile
 
 MIN_CONF = float(os.environ.get("TR_OCR_MIN_CONF", "40"))
 LANGS = os.environ.get("TR_OCR_LANGS", "slv+eng")
-MARK = "[ILLEGIBLE]"
+# Double-clickable, deliberately. The reviewer replaces these by hand, so
+# the marker has to select in one gesture: word selection stops at brackets,
+# leaving "[" and "]" behind after a paste. Underscore IS a word character,
+# so OCR_ILLEGIBLE selects whole -- and unlike _ILLEGIBLE_ it has no leading
+# or trailing underscore, which Word and LibreOffice autoformat into
+# underlining, silently turning the marker into formatting.
+MARK = os.environ.get("TR_ILLEGIBLE_MARK", "OCR_ILLEGIBLE")
 
 
 def page_text(img):

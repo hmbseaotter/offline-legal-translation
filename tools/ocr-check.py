@@ -47,6 +47,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -105,6 +106,17 @@ def tesseract_conf(img):
 
 
 def vision(img):
+    """Stream, so the wait is visible.
+
+    Run without streaming this sat silent for twenty-two minutes: several
+    minutes evicting the translation model and loading a 23 GB one, then
+    seven of inference, with nothing on the terminal to distinguish work from
+    a hang. A heartbeat during the load and a token count during generation
+    cost nothing and answer the only question the operator has.
+
+    The counter prints how many tokens have arrived, never what they say. The
+    page is evidence.
+    """
     with open(img, "rb") as fh:
         b64 = base64.b64encode(fh.read()).decode()
     body = json.dumps({
@@ -112,13 +124,46 @@ def vision(img):
         "prompt": ("Transcribe all text in this document image exactly as it "
                    "appears. Preserve line breaks, diacritics, numbers and "
                    "punctuation. Output only the transcription."),
-        "images": [b64], "stream": False,
+        "images": [b64], "stream": True,
         "options": {"temperature": 0.1, "num_ctx": 8192}}).encode()
     req = urllib.request.Request(OLLAMA + "/api/generate", body,
                                  {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=3600) as r:
-        d = json.loads(r.read())
-    return re.sub(r"<think>.*?</think>", "", d.get("response", ""), flags=re.S)
+
+    started = time.time()
+    first = threading.Event()
+
+    def waiting():
+        while not first.wait(30):
+            sys.stdout.write(f"\r                loading / prefilling, "
+                             f"{time.time() - started:.0f}s elapsed   ")
+            sys.stdout.flush()
+
+    t = threading.Thread(target=waiting, daemon=True)
+    t.start()
+    parts, n = [], 0
+    try:
+        with urllib.request.urlopen(req, timeout=3600) as r:
+            for line in r:
+                if not line.strip():
+                    continue
+                d = json.loads(line)
+                if not first.is_set():
+                    first.set()
+                    sys.stdout.write(f"\r                first token after "
+                                     f"{time.time() - started:.0f}s, reading   ")
+                parts.append(d.get("response", ""))
+                n += 1
+                if n % 20 == 0:
+                    sys.stdout.write(f"\r                {n} tokens, "
+                                     f"{time.time() - started:.0f}s        ")
+                    sys.stdout.flush()
+                if d.get("done"):
+                    break
+    finally:
+        first.set()
+        sys.stdout.write("\r" + " " * 70 + "\r")
+        sys.stdout.flush()
+    return re.sub(r"<think>.*?</think>", "", "".join(parts), flags=re.S)
 
 
 def nums(s):
@@ -137,6 +182,18 @@ def main():
     out = trlib.path("work", "ocr-check")
     os.makedirs(out, exist_ok=True)
     stem = os.path.splitext(os.path.basename(a.pdf))[0]
+
+    if not a.no_vision:
+        have = subprocess.run(["ollama", "list"], capture_output=True,
+                              timeout=60).stdout.decode("utf-8", "replace")
+        if VISION_MODEL.split(":")[0] not in have:
+            sys.exit(f"vision model {VISION_MODEL} is not registered.\n"
+                     f"Either pull it or run with --no-vision.")
+        print(f"  Tesseract runs in seconds; the vision pass takes about 7 "
+              f"minutes a page,")
+        print(f"  plus a one-off model load. {a.pages} page(s) means roughly "
+              f"{7 * a.pages + 8} minutes.")
+        print(f"  --no-vision gives the Tesseract-only view immediately.\n")
 
     tmp = tempfile.mkdtemp(prefix="ocrchk-")
     try:
@@ -182,6 +239,21 @@ def main():
                 print()
                 continue
 
+            # Say this before the wait, not after. The vision model is 23 GB
+            # against gams3's 13 on a 30 GB machine, so the first call evicts
+            # the translation model and loads this one before any inference
+            # starts -- several minutes of complete silence, which reads as a
+            # hang rather than as work.
+            if n == 1:
+                print(f"    vision      loading {VISION_MODEL} (23 GB) and "
+                      f"reading page 1.", flush=True)
+                print(f"                First page includes the model load; "
+                      f"allow 10-15 minutes.", flush=True)
+                print(f"                Later pages take about 7. Nothing is "
+                      f"wrong if this sits quiet.", flush=True)
+            else:
+                print(f"    vision      reading page {n}, about 7 minutes.",
+                      flush=True)
             t0 = time.time()
             try:
                 v_txt = vision(p)
