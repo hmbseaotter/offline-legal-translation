@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tr-pdf - OCR a scanned PDF, then translate the text into a .docx.
 #
-# Usage:  tr-pdf <input.pdf> <output.docx>
+# Usage:  tr-pdf [--ocr-only] <input.pdf> [output.docx]
 #
 # Two-stage by design. The OCR text layer is written to work/ocr/ and is
 # meant to be VERIFIED BY A HUMAN before the translation stage runs. A model
@@ -9,13 +9,31 @@
 #
 #   tr-pdf --ocr-only in.pdf     # stage 1: OCR, then go read the text
 #   tr-pdf in.pdf out.docx       # both stages
+#
+# The text layer comes from tr-ocrtext, which keeps Tesseract's per-word
+# confidence and replaces anything below the floor with OCR_ILLEGIBLE, rather
+# than from pdftotext, which cannot tell a certain word from a guessed one.
 
 set -euo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# See tr-run: an explicit TR_PROJECTS lifts the mount requirement, matching
-# trlib.PROJECTS_OVERRIDDEN.
-PROJECTS_OVERRIDDEN=${TR_PROJECTS+y}
-TR_PROJECTS="${TR_PROJECTS:-$HOME/translation-work/confidential-projects}"
+# A TR_PROJECTS pointing somewhere OTHER than the real container lifts the
+# mount requirement; merely being set does not.
+#
+# This used to read ${TR_PROJECTS+y}, which tested only whether the variable
+# existed. tr-setup exported it to this very default in ~/.bashrc, so every
+# interactive shell held the hatch open on the real container permanently.
+# tr-run and trlib were both corrected to compare resolved paths; this script
+# kept the old test while its comment claimed to match them, which is the
+# worst of both -- a guard that reads as present and is not. Same rule
+# everywhere, or the escape hatch works in one half of the kit and not the
+# other.
+DEFAULT_PROJECTS="$HOME/translation-work/confidential-projects"
+TR_PROJECTS="${TR_PROJECTS:-$DEFAULT_PROJECTS}"
+if [[ "$(readlink -f "$TR_PROJECTS")" == "$(readlink -f "$DEFAULT_PROJECTS")" ]]; then
+  PROJECTS_OVERRIDDEN=""
+else
+  PROJECTS_OVERRIDDEN="y"
+fi
 
 # The OCR text layer is the whole document in plain text -- the single most
 # sensitive artefact this pipeline produces. It belongs inside the container
@@ -69,7 +87,7 @@ fi
 # word Tesseract was sure of from one it invented -- and the forms in this
 # corpus are hand-filled, where inventing is exactly what it does. tr-ocrtext
 # keeps the per-word confidence and marks what could not be read, so a
-# scrawled amount reaches the translator as [ILLEGIBLE] rather than as a
+# scrawled amount reaches the translator as OCR_ILLEGIBLE rather than as a
 # confident figure nobody has reason to doubt.
 "$BIN/tr-ocrtext" "$pdf" "$txt"
 
