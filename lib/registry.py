@@ -113,4 +113,9 @@ TOOLS = [
      'glossary entries. Runs no model. `--pin-all` proposes frequent terms too, '
      'since consistent-and-wrong is one find-and-replace while inconsistent is a '
      'hunt through every variant. **Operator only**'),
+    ('`tr-ocrstat [--min-pct N]`',
+     'Unreadable-token rate per PDF, worst first, against the '
+     '5%/20% thresholds. Answers "verify the OCR" for a whole corpus rather '
+     'than one file. Legibility only \u2014 a misread digit in clean print '
+     'scores high; use `ocr-check.py` for those. **Operator only**'),
 ]

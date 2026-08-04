@@ -114,6 +114,7 @@ flattens the tree.
 | `tools/highlight-docx.py <f.docx> [--apply] [--strict]`             | Re-colours command blocks in the operating documents that lost their highlighting. `--strict` also repaints blocks that merely differ from the rules, which is mostly churn against hand-tuned ones                                                                                          |
 | `tools/gen-docs.py [--apply]`                                       | Writes the tables in CLAUDE.md and the manual from lib/registry.py. Run by the pre-commit hook, which refuses a commit where they have drifted                                                                                                                                               |
 | `tr-terms [--min-count N] [--top N] [--pin-all] [--write]`          | Finds source terms the model rendered more than one way and proposes glossary entries. Runs no model. `--pin-all` proposes frequent terms too, since consistent-and-wrong is one find-and-replace while inconsistent is a hunt through every variant. **Operator only**                      |
+| `tr-ocrstat [--min-pct N]`                                          | Unreadable-token rate per PDF, worst first, against the 5%/20% thresholds. Answers "verify the OCR" for a whole corpus rather than one file. Legibility only — a misread digit in clean print scores high; use `ocr-check.py` for those. **Operator only**                                   |
 <!-- /GENERATED:tools -->
 
 ## Environment

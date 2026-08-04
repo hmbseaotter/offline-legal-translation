@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""tr-ocrstat - how readable is the OCR, file by file, before anything is translated.
+
+OPERATOR ONLY, container open. Prints source filenames, which in this corpus
+carry party names.
+
+Usage:  tr-ocrstat [--min-pct N]
+
+WHY THIS EXISTS
+
+Every source document here is a scan, so OCR is the first thing that can go
+wrong and the only one that goes wrong silently: a model fed corrupted text
+produces a fluent, confident translation of the corruption. The manual and
+the Phase 1 runbook both say to verify the OCR before translating, and both
+give thresholds -- but the only thing that measured them was
+phase1-setup.sh, over the three files in phase1/. On a real corpus the
+operator was left to open each text layer and work it out by hand, which for
+a bundle of any size means it does not get done.
+
+tr-ocrtext already marks every token Tesseract scored below the confidence
+floor. This just counts them per file and reads the answer against the
+thresholds, so the decision is made against numbers rather than impressions.
+
+THRESHOLDS
+
+  under 5%     proceed
+  5 - 20%      look at the marked pages before translating
+  20% or more  stop; rescan or ask for better copies
+
+From eight pages of two real documents. Starting points with a stated basis,
+not laws.
+
+WHAT IT CANNOT TELL YOU
+
+A confidence floor finds handwriting and damage. It does NOT find a misread
+digit in clean print: "12.450,00" read as 1248000 scores 86% and sails
+through. Only a second engine reading the same page finds that, which is
+what tools/ocr-check.py is for. So a file at 0% here is not verified, it is
+merely legible -- and the numbers on its pages still deserve a human or a
+cross-check.
+"""
+import argparse
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "lib"))
+import trlib  # noqa: E402
+
+MARK = os.environ.get("TR_ILLEGIBLE_MARK", "OCR_ILLEGIBLE")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--min-pct", type=float, default=0.0,
+                    help="only list files at or above this unreadable "
+                         "percentage")
+    a = ap.parse_args()
+
+    src = trlib.path("source")
+    ocr = trlib.path("work", "ocr")
+    if not os.path.isdir(src):
+        sys.exit(f"no source directory: {src}")
+
+    pdfs = []
+    for root, _dirs, files in os.walk(src):
+        for f in files:
+            if f.lower().endswith(".pdf") and not f.startswith("."):
+                full = os.path.join(root, f)
+                pdfs.append(os.path.relpath(full, src))
+    pdfs.sort()
+    if not pdfs:
+        sys.exit("no PDFs under source/ - nothing to check")
+
+    rows, missing = [], []
+    for rel in pdfs:
+        # tr-pdf flattens the source-relative path to name its cache entry.
+        base = os.path.splitext(rel)[0].replace(os.sep, "__")
+        txt = os.path.join(ocr, base + ".txt")
+        if not os.path.exists(txt):
+            missing.append(rel)
+            continue
+        body = open(txt, encoding="utf-8", errors="replace").read()
+        toks = body.split()
+        bad = len(re.findall(re.escape(MARK), body))
+        total = len(toks)
+        pct = (100.0 * bad / total) if total else 100.0
+        rows.append((pct, rel, total, bad))
+
+    rows.sort(reverse=True)
+
+    print(f"  {len(pdfs)} PDF(s) under source/, {len(rows)} with a text layer\n")
+    if rows:
+        print(f"  {'unreadable':>10}  {'words':>7}  file")
+        print(f"  {'-'*10}  {'-'*7}  {'-'*46}")
+    stop = look = fine = 0
+    for pct, rel, total, bad in rows:
+        if pct < a.min_pct:
+            continue
+        if pct >= 20:
+            verdict, stop = "STOP", stop + 1
+        elif pct >= 5:
+            verdict, look = "look", look + 1
+        else:
+            verdict, fine = "", fine + 1
+        print(f"  {pct:>9.1f}%  {total:>7}  {rel[:46]:<46} {verdict}")
+
+    print()
+    if missing:
+        print(f"  {len(missing)} PDF(s) have no text layer yet. OCR them all "
+              f"in one pass:")
+        print(f"      tr-inventory --count --with-ocr")
+        print(f"  or one at a time:  tr-pdf --ocr-only source/<file>.pdf\n")
+
+    if stop:
+        print(f"  {stop} file(s) at or above 20% unreadable. Translating these "
+              f"measures Tesseract,")
+        print(f"  not the pipeline. Rescan them or ask for better copies "
+              f"before tr-run.")
+    if look:
+        print(f"  {look} file(s) between 5% and 20%. Open the text layer "
+              f"against the page images")
+        print(f"  and check what is marked {MARK} before translating.")
+    if fine and not stop and not look:
+        print(f"  All {fine} file(s) below 5% unreadable.")
+
+    print()
+    print("  Legibility is not correctness. A confidence floor catches")
+    print("  handwriting and damage; it cannot catch a misread digit in clean")
+    print("  print, which scores high and reads as a fact. For pages carrying")
+    print("  amounts, dates or case numbers, read two engines against each")
+    print("  other:")
+    print("      tools/ocr-check.py source/<file>.pdf --pages 2")
+    print()
+    print("  Text layers:  " + ocr)
+    return 1 if stop else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
