@@ -760,8 +760,22 @@ def _key(src, direction, gloss_sig=""):
     segments it never touches.
     """
     h = hashlib.sha256()
-    h.update(f"{direction}\x00{MODEL}\x00{PROMPT_VERSION}\x00{gloss_sig}"
-             f"\x00{src}".encode())
+    if gloss_sig:
+        h.update(f"{direction}\x00{MODEL}\x00{PROMPT_VERSION}\x00{gloss_sig}"
+                 f"\x00{src}".encode())
+    else:
+        # No applicable glossary terms: hash exactly as this function did
+        # before the glossary was part of the key, so rows written then are
+        # still reachable.
+        #
+        # Adding the field unconditionally silently orphaned an entire
+        # memory. The extra separator changed the digest even when the
+        # glossary contributed nothing, so 532 already-translated segments
+        # became invisible to tr-run, tr-lint and tr-terms at once -- not
+        # reported as missing, just gone, which is the worst way for a cache
+        # to fail. Found because tr-terms said "no segments for prompt v5"
+        # over a memory that held 532 of them.
+        h.update(f"{direction}\x00{MODEL}\x00{PROMPT_VERSION}\x00{src}".encode())
     return h.hexdigest()
 
 def tm_current_key(src, direction, gloss):
