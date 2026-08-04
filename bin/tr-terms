@@ -109,6 +109,24 @@ def phrases(text, stop, nmax=3):
     return out
 
 
+def untranslated(term, rendering):
+    """Is this 'rendering' just the source term left in Slovene?
+
+    The memory holds segments the model did not translate -- about 11% of
+    them, which is a known and separate problem. For those the dominant
+    "rendering" of "provizija" is "provizija", and proposing that as a
+    glossary entry would have tr-lint enforce leaving the word in Slovene on
+    every future document. A glossary that pins the untranslated form is
+    worse than no glossary, because it makes the defect permanent and calls
+    it terminology.
+
+    Word-level rather than whole-string, so "akontacija dohodnine" ->
+    "dohodnine" is caught too.
+    """
+    tw = set(term.lower().split())
+    return bool(tw & set(rendering.lower().split()))
+
+
 def dominant(counter, total):
     """The leading rendering and its closest rival, if there is a real one."""
     if not counter:
@@ -182,6 +200,21 @@ def main():
             msg.append("The memory is empty - run tr-run first.")
         sys.exit("\n".join(msg))
 
+    # A segment the model returned unchanged carries no evidence about
+    # terminology, and it actively poisons it: with the whole segment still
+    # in Slovene, the phrase counter offers one Slovene word as the
+    # "rendering" of another -- "varnostni" rendered as "provizija". Word
+    # overlap between term and rendering does not catch that, because the
+    # two words are different. Dropping these segments does.
+    #
+    # About 11% of the Phase 1 memory is untranslated, which is a known and
+    # separate problem; this only stops it contaminating the glossary.
+    echoed = sum(1 for src, tgt in rows if tgt.strip() == src.strip())
+    rows = [(src, tgt) for src, tgt in rows if tgt.strip() != src.strip()]
+    if not rows:
+        sys.exit("every segment came back identical to its source - there is "
+                 "no translation here to draw terminology from")
+
     known = {s.lower() for s, _t in gloss}
     where = collections.defaultdict(list)
     for src, tgt in rows:
@@ -217,7 +250,8 @@ def main():
         lift2 = ((c2 / n) / max(globals_[r2] / total, 1e-9)) if r2 else 0
         if (r2 and c1 < n and c2 >= max(2, n * 0.25) and (c1 + c2) >= n * 0.6
                 and lift2 >= 2.0):
-            findings.append((1, c2, n, term, r1, c1, r2, c2))
+            if not untranslated(term, r1):
+                findings.append((1, n, n, term, r1, c1, r2, c2))
             continue
 
         if not a.pin_all:
@@ -228,14 +262,31 @@ def main():
         # But only where the rendering is clear -- present in most of the
         # term's targets, and distinctly more so than in the corpus at large.
         lift = (c1 / n) / max(globals_[r1] / total, 1e-9) if r1 else 0
-        if r1 and c1 >= n * 0.6 and lift >= 2.0:
-            findings.append((0, c1, n, term, r1, c1, r2 or "", c2))
+        if r1 and c1 >= n * 0.6 and lift >= 2.0 and not untranslated(term, r1):
+            findings.append((0, n, n, term, r1, c1, r2 or "", c2))
 
-    findings.sort(reverse=True)
-    findings = findings[:a.top]
+    # Frequency first, as the reviewer reads it: the term costing the most
+    # edits is the one worth deciding first.
+    findings.sort(key=lambda f: (-f[2], f[3]))
 
-    print(f"  {len(rows)} segments in memory, model {trlib.MODEL} "
+    # One phrase, not four rows of it. The n-gram sweep yields "varnostni",
+    # "varnostni sms", "provizija varnostni" and "provizija varnostni sms"
+    # for a single expression; when a shorter term already kept has the same
+    # rendering, the longer one adds nothing but noise to the worklist.
+    kept, seen_pairs = [], []
+    for f in findings:
+        term, r1 = f[3], f[4]
+        if any(k_term in term and k_r1 == r1 for k_term, k_r1 in seen_pairs):
+            continue
+        seen_pairs.append((term, r1))
+        kept.append(f)
+    findings = kept[:a.top]
+
+    print(f"  {len(rows)} translated segment(s), model {trlib.MODEL} "
           f"prompt {trlib.PROMPT_VERSION}")
+    if echoed:
+        print(f"  {echoed} segment(s) came back unchanged and were excluded "
+              f"- they carry no terminology")
     print(f"  {len(known)} glossary term(s) already pinned\n")
     if not findings:
         print("  No term showed two competing renderings above the thresholds.")
@@ -260,15 +311,23 @@ def main():
     out = trlib.path("glossary", "candidates.tsv")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
-        fh.write("# Candidates from tr-terms. Delete the ones you reject,\n"
-                 "# set the rendering you want in column 2, then append to\n"
-                 "# glossary/project.tsv. Nothing here is agreed until you\n"
-                 "# have read it.\n")
-        fh.write("# source\tchosen rendering\tnote (alternatives seen)\n")
+        # One value per column, nothing packed into prose. The note column
+        # used to read "seen 36x: payment (19), invoice (18)", which a
+        # spreadsheet import splits on the commas and spaces into six
+        # columns of rubble. Counts belong in their own numeric columns
+        # where they can be sorted and filtered.
+        #
+        # Comment lines carry no tabs, so they stay in column A instead of
+        # spreading the header across the sheet.
+        fh.write("# Candidates from tr-terms, most frequent first.\n")
+        fh.write("# Delete the rows you reject. Correct column 2 where the\n"
+                 "# rendering is wrong. Then append the survivors to\n"
+                 "# glossary/project.tsv. Nothing here is agreed yet.\n")
+        fh.write("# conflict = the model already used two renderings.\n")
+        fh.write("source\trendering\tsegments\tconflict\talso seen\talso count\n")
         for conflict, _s, n, term, r1, c1, r2, c2 in findings:
-            note = (f"seen {n}x: {r1} ({c1}), {r2} ({c2})" if conflict
-                    else f"seen {n}x, rendered {r1} consistently")
-            fh.write(f"{term}\t{r1}\t{note}\n")
+            fh.write(f"{term}\t{r1}\t{n}\t{'yes' if conflict else ''}\t"
+                     f"{r2 if conflict else ''}\t{c2 if conflict else ''}\n")
     print(f"\n  candidates: {out}")
     print("  These are proposals from the model's own output, not agreed")
     print("  terminology. Read each one before it becomes a rule tr-lint")
