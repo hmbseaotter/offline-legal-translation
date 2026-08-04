@@ -108,9 +108,9 @@ TOOLS = [
     ('`tools/gen-docs.py [--apply]`',
      'Writes the tables in CLAUDE.md and the manual from lib/registry.py. '
      'Run by the pre-commit hook, which refuses a commit where they have drifted'),
-    ('`tr-terms [--min-count N] [--top N] [--write]`',
+    ('`tr-terms [--min-count N] [--top N] [--pin-all] [--write]`',
      'Finds source terms the model rendered more than one way and proposes '
-     'glossary entries. Runs no model. Proposals only \u2014 harvesting the '
-     'model\u2019s own output as agreed terminology would pin its mistakes. '
-     '**Operator only**'),
+     'glossary entries. Runs no model. `--pin-all` proposes frequent terms too, '
+     'since consistent-and-wrong is one find-and-replace while inconsistent is a '
+     'hunt through every variant. **Operator only**'),
 ]

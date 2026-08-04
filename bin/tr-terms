@@ -4,11 +4,13 @@
 OPERATOR ONLY, container open. Reads the translation memory, which holds real
 sentences, and its output can contain party names.
 
-Usage:  tr-terms [--min-count N] [--top N] [--write]
+Usage:  tr-terms [--min-count N] [--top N] [--pin-all] [--write]
 
   --min-count  a source term must appear in this many segments (default 3)
   --top        how many candidates to report (default 25)
-  --write      append the accepted lines to the PROJECT glossary
+  --pin-all    propose every frequent term with a clear rendering, not only
+               the ones already disagreeing
+  --write      append the proposed lines to the PROJECT glossary
 
 WHAT IT DOES
 
@@ -20,17 +22,28 @@ of what it chose three segments ago, and no decoding setting changes that.
 
 Runs no model. Seconds, over the memory that already exists.
 
-WHAT IT DELIBERATELY DOES NOT DO
+WHY AN UNCONFIRMED GLOSSARY IS STILL WORTH HAVING
 
-It does not write glossary entries on its own. The only evidence available
-during a run is the model's own output, so harvesting that would pin its
-first guess as the agreed rendering -- including the wrong ones, and
-including whichever of two inconsistent renderings happened to be more
-common. Codifying the model's mistakes as terminology is worse than having
-no glossary, because tr-lint would then enforce them.
+The first version of this tool refused to write anything without the
+translator confirming each line, on the grounds that harvesting the model's
+own output pins its first guess -- including the wrong ones. The translator
+made the better argument: consistency has value independently of
+correctness. A term rendered the same way everywhere and wrongly is one
+find-and-replace. A term rendered three ways is a hunt through every
+variant with no way to know you found them all, which is the expensive
+case and the one they actually hit.
 
-So this produces a worklist. The translator picks the rendering; --write
-appends what they accepted.
+So --write exists and --pin-all makes it worth using, proposing entries for
+frequent terms whether or not they have already been seen to disagree,
+because a term that is consistent across three documents can still drift in
+the fourth. Written lines are marked unreviewed so they can be found again.
+
+The one case where this costs correctness rather than just deferring it: a
+term that legitimately renders differently by context gets forced to one
+rendering, making some segments wrong that were right. Slovene "izvod" is
+a copy or a counterpart depending on what is being counted. Pinning is
+still usually the better trade, but it is a trade, and the note column
+records what else was seen so a wrong pin can be found and undone.
 
 HOW IT FINDS THEM WITHOUT WORD ALIGNMENT
 
@@ -119,6 +132,10 @@ def main():
                     help="how many candidates to report (default 25)")
     ap.add_argument("--write", action="store_true",
                     help="append accepted lines to the project glossary")
+    ap.add_argument("--pin-all", action="store_true",
+                    help="propose an entry for every frequent term with a "
+                         "clear rendering, not only the ones already "
+                         "disagreeing")
     a = ap.parse_args()
 
     dbp = trlib.path("work", "tm.sqlite")
@@ -145,6 +162,15 @@ def main():
         for p in set(phrases(src, SL_STOP)):
             where[p].append(tgt)
 
+    # How often each target phrase occurs across the WHOLE corpus. A phrase
+    # that is everywhere ("the bank") is not evidence about any particular
+    # term; it just co-occurs. --pin-all needs this or it proposes boilerplate
+    # as terminology.
+    globals_ = collections.Counter()
+    for _src, tgt in rows:
+        globals_.update(set(phrases(tgt, EN_STOP)))
+    total = len(rows)
+
     findings = []
     for term, targets in where.items():
         if len(targets) < a.min_count or term in known:
@@ -153,14 +179,28 @@ def main():
         for t in targets:
             counts.update(set(phrases(t, EN_STOP)))
         r1, c1, r2, c2 = dominant(counts, len(targets))
-        if not r2:
-            continue
         n = len(targets)
-        # Both must be common enough to be renderings rather than noise, and
-        # between them account for most of the occurrences.
-        if c2 < max(2, n * 0.25) or (c1 + c2) < n * 0.6:
+
+        # A rival only counts as a competing RENDERING if it is distinctly
+        # associated with this term. Without that test "banka" reports a
+        # conflict between "bank" and "client", because sentences about a
+        # bank tend to mention the client -- co-occurrence, not disagreement.
+        lift2 = ((c2 / n) / max(globals_[r2] / total, 1e-9)) if r2 else 0
+        if (r2 and c2 >= max(2, n * 0.25) and (c1 + c2) >= n * 0.6
+                and lift2 >= 2.0):
+            findings.append((1, c2, n, term, r1, c1, r2, c2))
             continue
-        findings.append((c2, n, term, r1, c1, r2, c2))
+
+        if not a.pin_all:
+            continue
+        # Pinning a term that is currently consistent is still worth doing:
+        # consistent-and-wrong is one find-and-replace, inconsistent is a
+        # hunt through every variant with no way to know you found them all.
+        # But only where the rendering is clear -- present in most of the
+        # term's targets, and distinctly more so than in the corpus at large.
+        lift = (c1 / n) / max(globals_[r1] / total, 1e-9) if r1 else 0
+        if r1 and c1 >= n * 0.6 and lift >= 2.0:
+            findings.append((0, c1, n, term, r1, c1, r2 or "", c2))
 
     findings.sort(reverse=True)
     findings = findings[:a.top]
@@ -178,9 +218,10 @@ def main():
     print("  edit the translator would otherwise make by hand every time.\n")
     print(f"  {'source term':<28} {'seen':>4}  competing renderings")
     print(f"  {'-'*28} {'-'*4}  {'-'*40}")
-    for _s, n, term, r1, c1, r2, c2 in findings:
-        print(f"  {term[:28]:<28} {n:>4}  {r1[:20]:<20} {c1:>3}   "
-              f"{r2[:20]:<20} {c2:>3}")
+    for conflict, _s, n, term, r1, c1, r2, c2 in findings:
+        rival = f"{r2[:20]:<20} {c2:>3}" if r2 else ""
+        flag = "!" if conflict else " "
+        print(f" {flag}{term[:28]:<28} {n:>4}  {r1[:20]:<20} {c1:>3}   {rival}")
 
     out = trlib.path("glossary", "candidates.tsv")
     os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -190,8 +231,10 @@ def main():
                  "# glossary/project.tsv. Nothing here is agreed until you\n"
                  "# have read it.\n")
         fh.write("# source\tchosen rendering\tnote (alternatives seen)\n")
-        for _s, n, term, r1, c1, r2, c2 in findings:
-            fh.write(f"{term}\t{r1}\tseen {n}x: {r1} ({c1}), {r2} ({c2})\n")
+        for conflict, _s, n, term, r1, c1, r2, c2 in findings:
+            note = (f"seen {n}x: {r1} ({c1}), {r2} ({c2})" if r2
+                    else f"seen {n}x, rendered {r1} consistently")
+            fh.write(f"{term}\t{r1}\t{note}\n")
     print(f"\n  candidates: {out}")
     print("  These are proposals from the model's own output, not agreed")
     print("  terminology. Read each one before it becomes a rule tr-lint")
@@ -200,8 +243,9 @@ def main():
     if a.write:
         proj = trlib.path("glossary", "project.tsv")
         with open(proj, "a", encoding="utf-8") as fh:
-            for _s, n, term, r1, c1, r2, c2 in findings:
-                fh.write(f"{term}\t{r1}\tfrom tr-terms, unreviewed\n")
+            for conflict, _s, n, term, r1, c1, r2, c2 in findings:
+                fh.write(f"{term}\t{r1}\tfrom tr-terms, unreviewed"
+                         f"{' (was inconsistent)' if r2 else ''}\n")
         print(f"\n  appended {len(findings)} line(s) to {proj}")
         print("  Marked unreviewed. Read them before the next run, because")
         print("  tr-lint will now report every draft that disagrees.")
