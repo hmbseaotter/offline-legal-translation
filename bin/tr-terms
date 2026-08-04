@@ -181,12 +181,15 @@ def main():
         r1, c1, r2, c2 = dominant(counts, len(targets))
         n = len(targets)
 
-        # A rival only counts as a competing RENDERING if it is distinctly
-        # associated with this term. Without that test "banka" reports a
-        # conflict between "bank" and "client", because sentences about a
-        # bank tend to mention the client -- co-occurrence, not disagreement.
+        # A conflict requires the leader to NOT cover every occurrence. If a
+        # term's dominant rendering appears in all of its segments, the term
+        # is rendered consistently and anything else present is co-occurrence
+        # -- "banka" is always "bank", and "client" merely turns up in
+        # sentences about banks. This is the translator's observation, and it
+        # is a better rule than the association threshold it replaces:
+        # exact, needs no tuning, and cannot be defeated by a small corpus.
         lift2 = ((c2 / n) / max(globals_[r2] / total, 1e-9)) if r2 else 0
-        if (r2 and c2 >= max(2, n * 0.25) and (c1 + c2) >= n * 0.6
+        if (r2 and c1 < n and c2 >= max(2, n * 0.25) and (c1 + c2) >= n * 0.6
                 and lift2 >= 2.0):
             findings.append((1, c2, n, term, r1, c1, r2, c2))
             continue
@@ -216,10 +219,15 @@ def main():
     print("  Terms rendered more than one way. The count is segments, not")
     print("  occurrences. Pick one rendering per term; the other becomes an")
     print("  edit the translator would otherwise make by hand every time.\n")
-    print(f"  {'source term':<28} {'seen':>4}  competing renderings")
+    print(f"  {'source term':<28} {'seen':>4}  rendering "
+          f"(! = two competing)")
     print(f"  {'-'*28} {'-'*4}  {'-'*40}")
     for conflict, _s, n, term, r1, c1, r2, c2 in findings:
-        rival = f"{r2[:20]:<20} {c2:>3}" if r2 else ""
+        # Only a genuine conflict has a rival worth showing. For a term
+        # rendered consistently, the runner-up is co-occurrence and printing
+        # it under "competing renderings" invites exactly the misreading the
+        # leader-covers-all rule exists to prevent.
+        rival = f"{r2[:20]:<20} {c2:>3}" if (conflict and r2) else ""
         flag = "!" if conflict else " "
         print(f" {flag}{term[:28]:<28} {n:>4}  {r1[:20]:<20} {c1:>3}   {rival}")
 
@@ -232,7 +240,7 @@ def main():
                  "# have read it.\n")
         fh.write("# source\tchosen rendering\tnote (alternatives seen)\n")
         for conflict, _s, n, term, r1, c1, r2, c2 in findings:
-            note = (f"seen {n}x: {r1} ({c1}), {r2} ({c2})" if r2
+            note = (f"seen {n}x: {r1} ({c1}), {r2} ({c2})" if conflict
                     else f"seen {n}x, rendered {r1} consistently")
             fh.write(f"{term}\t{r1}\t{note}\n")
     print(f"\n  candidates: {out}")
