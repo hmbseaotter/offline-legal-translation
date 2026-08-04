@@ -106,7 +106,7 @@ def main():
             out = " ".join(
                 trlib.ollama_translate(s, a.src, a.tgt, gloss) for s in segs)
         out = first.apply(out)
-        set_paragraph_text(par, out)
+        set_paragraph_text(par, trlib.xml_safe(out))
         trlib.progress(i, len(todo), src[:48])
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)

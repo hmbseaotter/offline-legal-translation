@@ -73,7 +73,12 @@ if [[ ! -f "$txt" ]]; then
 
   if [[ "$native_words" -ge 50 && "${glyphless:-0}" -eq 0 ]]; then
     echo "  born-digital: $native_words words of real text, no OCR needed"
-    pdftotext -layout "$IN" "$txt"
+    # -nopgbrk: pdftotext writes a form feed between pages, which is a
+    # control character XML forbids. Nothing in the OCR path ever emitted
+    # one, so the document writers had never met it and died at the last
+    # step with a whole file's translation already done. trlib.xml_safe
+    # catches it too; not generating it is better than cleaning it up.
+    pdftotext -layout -nopgbrk "$IN" "$txt"
   else
     if [[ ! -f "$pdf" ]]; then
       echo "  OCR ($LANGS): $(basename "$IN")"

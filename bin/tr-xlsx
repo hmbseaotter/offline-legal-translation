@@ -95,7 +95,7 @@ def main():
     for cell in targets:
         v = cell.value.strip()
         if v in mapping:
-            cell.value = mapping[v]
+            cell.value = trlib.xml_safe(mapping[v])
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     wb.save(a.out)

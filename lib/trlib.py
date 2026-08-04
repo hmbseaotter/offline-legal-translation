@@ -167,6 +167,34 @@ def manifest_paths(lang=None):
     return out
 
 
+# Characters XML forbids outright. python-docx hands text to lxml, which
+# rejects these with "All strings must be XML compatible" and takes the whole
+# file down at the last step, after every segment has been translated.
+_XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0e-\x1f\ufffe\uffff]")
+
+
+def xml_safe(text):
+    """Text that a .docx can actually hold.
+
+    pdftotext separates pages with a form feed. Nothing in the OCR path ever
+    produced one -- tr-ocrtext rebuilds its text from Tesseract's TSV -- so
+    the writers never met a control character until born-digital PDFs began
+    using pdftotext output directly. Then a 47-segment file translated for
+    several minutes and died writing the document, losing all of it.
+
+    A form feed is a page break, so it becomes a paragraph break rather than
+    disappearing. The rest carry no meaning in a legal document and are
+    dropped.
+
+    Applied at every point text enters a document, not only where the bug
+    appeared: the cost is a regex over a string, and the failure it prevents
+    is the loss of a whole file's work at the very end.
+    """
+    if not text:
+        return text
+    return _XML_ILLEGAL.sub("", text.replace("\f", "\n"))
+
+
 def target_name(rel, suffix=None):
     """The deliverable's name for a source file: suffix applied, extension
     mapped. Filenames are otherwise preserved -- design invariant 1."""

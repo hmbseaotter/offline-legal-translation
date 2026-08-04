@@ -54,10 +54,10 @@ def main():
             out = u
         if a.bilingual:
             p = doc.add_paragraph()
-            r = p.add_run(u)
+            r = p.add_run(trlib.xml_safe(u))
             r.italic = True; r.font.size = Pt(9)
             r.font.color.rgb = RGBColor(0x7F, 0x7F, 0x7F)
-        doc.add_paragraph(out)
+        doc.add_paragraph(trlib.xml_safe(out))
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     doc.save(a.out)
