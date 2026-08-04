@@ -153,8 +153,34 @@ def main():
     rows = [(src, tgt) for key, src, tgt, direction in raw
             if key == trlib.tm_current_key(src, direction, gloss)]
     if not rows:
-        sys.exit(f"no segments for model {trlib.MODEL} prompt "
-                 f"{trlib.PROMPT_VERSION} - run tr-run first")
+        # "run tr-run first" is the wrong advice when the memory is full of
+        # perfectly good segments under an earlier prompt. Terminology from a
+        # superseded version is still terminology -- it is what the
+        # translator reviewed -- so say what is actually there and how to
+        # read it.
+        other = collections.Counter()
+        db2 = sqlite3.connect(dbp)
+        for m, v, c in db2.execute(
+                "SELECT model, prompt_version, count(*) FROM tm "
+                "GROUP BY model, prompt_version ORDER BY count(*) DESC"):
+            other[(m, v)] = c
+        db2.close()
+        msg = [f"no segments for model {trlib.MODEL} prompt "
+               f"{trlib.PROMPT_VERSION}."]
+        if other:
+            msg.append("\nThe memory does hold:")
+            for (m, v), c in other.items():
+                msg.append(f"  {c:>6} segment(s)   model {m}   prompt {v}")
+            m0, v0 = next(iter(other))
+            msg.append(f"\nTerminology from an earlier prompt is still "
+                       f"terminology - it is what the translator reviewed.")
+            msg.append(f"To read those:\n"
+                       f"  TR_PROMPT_VERSION={v0} tr-terms "
+                       f"--min-count {a.min_count}"
+                       f"{' --pin-all' if a.pin_all else ''}")
+        else:
+            msg.append("The memory is empty - run tr-run first.")
+        sys.exit("\n".join(msg))
 
     known = {s.lower() for s, _t in gloss}
     where = collections.defaultdict(list)
