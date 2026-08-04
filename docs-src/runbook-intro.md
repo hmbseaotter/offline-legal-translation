@@ -87,6 +87,17 @@ spreadsheets the real figure is much higher than the one printed; run
 `tr-xlsx --survey` on each sheet for its unique-string count, which is what
 actually governs the work there.
 
+**Not every PDF is a scan.** A born-digital document — exported from a word
+processor rather than photographed — already carries exact text, and `tr-pdf`
+uses it directly rather than rasterising and re-reading it, which could only
+introduce errors that were never in the document. It says so:
+`born-digital: 412 words of real text, no OCR needed`.
+
+A PDF carrying somebody else's OCR layer is *not* treated as born-digital.
+Tesseract writes its invisible text in `GlyphLessFont`, so its presence means
+the text is OCR of unknown quality, and the file is re-read here — where at
+least the confidence of each word is recorded.
+
 **5. Check whether the OCR is good enough to build on.**
 
     tr-ocrstat

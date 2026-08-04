@@ -45,20 +45,59 @@ base="${rel//\//__}"
 pdf="$OCRDIR/$base.ocr.pdf"
 txt="$OCRDIR/$base.txt"
 
-if [[ ! -f "$pdf" ]]; then
-  echo "  OCR ($LANGS): $(basename "$IN")"
-  ocrmypdf -l "$LANGS" --rotate-pages --deskew --clean \
-           --output-type pdfa --quiet "$IN" "$pdf"
+# Is this a scan at all?
+#
+# Not every PDF in a bundle is. A born-digital document -- one exported from
+# a word processor rather than photographed -- already carries exact text,
+# and OCR can only make it worse: rasterising a perfect text layer and
+# reading it back with Tesseract introduces errors that were never in the
+# document. On a drop of 89 files this was the majority case and the
+# pipeline treated all of them as scans.
+#
+# It also aborted on them. ocrmypdf refuses a page that already has text
+# unless told what to do about it, so every such file failed with
+# PriorOcrFoundError and produced nothing.
+#
+# GlyphLessFont is the tell. Tesseract writes its invisible text layer in
+# that font, so its presence means the text is somebody's OCR rather than
+# the document's own -- and OCR of unknown provenance is worth redoing,
+# because ours at least records which words it was unsure of.
+if [[ ! -f "$txt" ]]; then
+  # Braces, not `|| echo 0`. This script runs under `set -o pipefail`, so a
+  # pdftotext that exits non-zero fails the whole pipeline even though wc
+  # succeeded and printed a number -- the fallback then fired too and the
+  # variable held "0\n0", which [[ ]] rejects as an arithmetic expression.
+  # Swallowing the failure inside the braces keeps exactly one number.
+  native_words=$( { pdftotext -layout "$IN" - 2>/dev/null || true; } | wc -w )
+  glyphless=$( { pdffonts "$IN" 2>/dev/null || true; } | grep -ci glyphless || true )
+
+  if [[ "$native_words" -ge 50 && "${glyphless:-0}" -eq 0 ]]; then
+    echo "  born-digital: $native_words words of real text, no OCR needed"
+    pdftotext -layout "$IN" "$txt"
+  else
+    if [[ ! -f "$pdf" ]]; then
+      echo "  OCR ($LANGS): $(basename "$IN")"
+      # --skip-text so a mixed document -- some pages scanned, some native --
+      # is processed rather than refused. Not --redo-ocr, which ocrmypdf
+      # rejects alongside --deskew and --clean, and those are what make a
+      # crooked scan readable in the first place.
+      ocrmypdf -l "$LANGS" --rotate-pages --deskew --clean --skip-text \
+               --output-type pdfa --quiet "$IN" "$pdf"
+    else
+      echo "  OCR cached: $(basename "$pdf")"
+    fi
+    # Not pdftotext here. It reads the text layer ocrmypdf embedded and
+    # cannot tell a word Tesseract was sure of from one it invented -- and
+    # the forms in this corpus are hand-filled, where inventing is exactly
+    # what it does. tr-ocrtext keeps the per-word confidence and marks what
+    # could not be read, so a scrawled amount reaches the translator as
+    # OCR_ILLEGIBLE rather than as a confident figure nobody has reason to
+    # doubt.
+    "$BIN/tr-ocrtext" "$pdf" "$txt"
+  fi
 else
-  echo "  OCR cached: $(basename "$pdf")"
+  echo "  text layer cached: $(basename "$txt")"
 fi
-# Not pdftotext. It reads the text layer ocrmypdf embedded and cannot tell a
-# word Tesseract was sure of from one it invented -- and the forms in this
-# corpus are hand-filled, where inventing is exactly what it does. tr-ocrtext
-# keeps the per-word confidence and marks what could not be read, so a
-# scrawled amount reaches the translator as OCR_ILLEGIBLE rather than as a
-# confident figure nobody has reason to doubt.
-"$BIN/tr-ocrtext" "$pdf" "$txt"
 
 wc_w=$(wc -w < "$txt")
 echo "  text layer: $txt  ($wc_w words)"
