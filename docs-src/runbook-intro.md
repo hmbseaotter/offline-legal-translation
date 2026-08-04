@@ -162,7 +162,12 @@ so this is minutes, not hours:
 
 **12. Deliver from `translated/`, then close.**
 
-    case-close
+    cd ~ && case-close
+
+`cd` first, and not out of tidiness. A shell whose working directory is
+inside the container keeps the filesystem busy exactly as an open file does,
+so closing from within the project directory fails — and `-f` does not help,
+because the kernel counts a working directory as a use of the mount.
 
 Closing unmounts the container; it does not empty it. Everything stays
 inside the container file, encrypted, and returns at the next `case-open`.

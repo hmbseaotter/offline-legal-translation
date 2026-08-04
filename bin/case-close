@@ -23,21 +23,72 @@ if ! mountpoint -q "$MNT"; then
   exit 0
 fi
 
-busy="$(sudo lsof +D "$MNT" 2>/dev/null | tail -n +2)"
-if [[ -n "$busy" ]]; then
-  echo "Files are still open under $MNT:"
-  echo "$busy" | awk '{printf "  %-14s pid %-8s %s\n", $1, $2, $9}' | sort -u | head -20
-  echo
-  if [[ $FORCE -eq 0 ]]; then
-    echo "Finish or stop those processes, then run case-close again."
-    echo "To unmount anyway (risks data loss in a running batch): case-close -f"
-    exit 1
+# Everything this script spawns -- the sudo, the lsof, the subshells -- runs
+# in its own process group, and every one of them inherits the caller's
+# working directory. Run from inside the container, case-close therefore
+# reported ITSELF as the reason it could not close: eight entries, of which
+# two were the lsof doing the reporting. The check could never pass.
+MYPG="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+raw="$(sudo lsof +D "$MNT" 2>/dev/null | tail -n +2)"
+busy="$(printf '%s\n' "$raw" | awk -v pg="$MYPG" '
+  NF >= 9 {
+    cmd = "ps -o pgid= -p " $2 " 2>/dev/null"
+    cmd | getline theirs; close(cmd)
+    gsub(/ /, "", theirs)
+    if (theirs != pg) print
+  }')"
+
+# A process merely sitting in the directory is a different problem from one
+# writing to it, and it has a different fix: cd out. lsof marks the first
+# with FD "cwd". Telling an operator to "finish or stop those processes"
+# when the process is their own login shell, and the remedy is one cd, is
+# advice that cannot be followed.
+cwd_only="$(printf '%s\n' "$busy" | awk 'NF>=9 && $4 != "cwd"' )"
+
+if [[ -n "${busy//[[:space:]]/}" ]]; then
+  if [[ -z "${cwd_only//[[:space:]]/}" ]]; then
+    echo "Nothing is writing to $MNT, but something is sitting in it:"
+    printf '%s\n' "$busy" | awk '{printf "  %-12s pid %-8s cwd %s\n", $1, $2, $9}' \
+      | sort -u | head -20
+    echo
+    echo "A shell whose working directory is inside the container keeps it"
+    echo "busy. Leave the directory and close again -- no force needed:"
+    echo
+    echo "    cd ~ && case-close"
+    echo
+    [[ $FORCE -eq 0 ]] && exit 1
+  else
+    echo "Files are still open under $MNT:"
+    printf '%s\n' "$cwd_only" | awk '{printf "  %-12s pid %-8s %s\n", $1, $2, $9}' \
+      | sort -u | head -20
+    echo
+    if [[ $FORCE -eq 0 ]]; then
+      echo "Finish or stop those processes, then run case-close again."
+      echo "To unmount anyway (risks data loss in a running batch): case-close -f"
+      exit 1
+    fi
   fi
-  echo "-f given: unmounting anyway."
+  [[ $FORCE -eq 1 ]] && echo "-f given: unmounting anyway."
 fi
 
 sync
-sudo umount "$MNT" || { echo "umount failed" >&2; exit 1; }
+if ! sudo umount "$MNT"; then
+  {
+    echo
+    echo "umount failed: something still has $MNT open."
+    echo
+    echo "The usual cause is a shell sitting in the directory -- including"
+    echo "the one you are typing in. It does not show as an open file, and"
+    echo "-f does not help, because the kernel counts a working directory as"
+    echo "a use of the filesystem just as much as an open file."
+    echo
+    echo "    cd ~ && case-close"
+    echo
+    echo "If that is not it, find the holder with:"
+    echo "    sudo lsof +D $MNT"
+  } >&2
+  exit 1
+fi
 sudo cryptsetup luksClose "$MAP"
 
 # Re-arm the immutable mountpoint so nothing writes to the bare directory.
