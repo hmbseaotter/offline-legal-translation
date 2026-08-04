@@ -22,6 +22,13 @@ Rules:
   that marker was read successfully, however fragmentary it looks. Short
   labels, postal codes, addresses, column headings and isolated figures are
   normal in these documents and must be translated, not discarded.
+- A segment that is not a sentence is still a segment. Column headings,
+  form labels, table captions and single words must be rendered in {TGT}:
+  "Datum" becomes "Date", "Znesek" becomes "Amount", "Namen plačila"
+  becomes "Payment purpose". Reproducing the source unchanged is correct
+  only for the things listed above as verbatim — personal and place names,
+  case and account numbers, codes. So "1000 Ljubljana" stays as it is,
+  while "Datum plačila" does not.
 - Match the formal register of legal documents.
 
 {GLOSSARY}

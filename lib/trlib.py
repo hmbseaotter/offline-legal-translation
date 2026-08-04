@@ -233,7 +233,7 @@ NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
 # not an identifier, so the rule was wrong rather than ambiguous.
 # Invariant 7 -- the memory keys on this, so anything cached under an earlier
 # version was produced under a different instruction and must not be reused.
-PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v5")
+PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v6")
 
 def path(*p):
     return os.path.join(require_root(), *p)

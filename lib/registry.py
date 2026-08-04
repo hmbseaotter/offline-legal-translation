@@ -34,7 +34,7 @@ ENV_VARS = [
      'Per-project, in project.conf. Set if the client requires it'),
     ('TR_NUM_CTX', '8192',
      'Context window. Lower if memory is tight'),
-    ('TR_PROMPT_VERSION', 'v5',
+    ('TR_PROMPT_VERSION', 'v6',
      'Part of the cache key. Bump to force retranslation'),
     ('TR_OCR_LANGS', 'slv+eng',
      'Tesseract languages. Add deu for German'),
