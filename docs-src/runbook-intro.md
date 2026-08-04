@@ -25,6 +25,19 @@ The header backup only changes when a passphrase is added, changed or
 removed. Writing data never touches it, so one copy stays valid until you
 change the passphrase.
 
+**Then check that the boundary is real:**
+
+    case-status
+
+It reports whether each guard is actually installed, not merely whether the
+container is closed. Both must read `installed`. This matters because the
+guard is what makes the boundary structural rather than remembered — but
+installing it is itself remembered, and that is the part that has failed in
+practice: the terminal guard was in place, the desktop guard was not, and
+the desktop application opened with case material mounted. `case-status`
+used to say "Safe to start Claude Code" throughout, because it was reporting
+the mount and assuming the rest.
+
 ### Per matter
 
 **1. Open the container and create the project.**

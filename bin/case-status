@@ -5,6 +5,56 @@ IMG="${CASE_IMG:-$HOME/.case/confidential.luks}"
 MAP="${CASE_MAP:-casedata}"
 MNT="${CASE_MNT:-$HOME/translation-work/confidential-projects}"
 
+# Are the guards actually on this machine?
+#
+# Both lines below used to be asserted rather than checked. "Claude Code
+# will REFUSE to start" and "Safe to start Claude Code" are claims about
+# software that may not be installed, and on this machine one of it was
+# not: the PATH wrapper was in place, the desktop guard never had been, and
+# the desktop application launched with the container mounted -- which is
+# the one thing the whole arrangement exists to prevent.
+#
+# The guard makes the boundary structural instead of remembered. Installing
+# the guard was itself remembered, and that is where it broke. So the
+# question "is the boundary enforced" now gets an answer from the machine
+# rather than from a document.
+guard_report() {
+  local pathg="$HOME/.local/sbin/claude"
+  local deskg="$HOME/.local/sbin/case-guard-desktop"
+  local entry="$HOME/.local/share/applications/com.anthropic.Claude.desktop"
+  local missing=0
+
+  if [[ -x "$pathg" ]] && [[ "$(command -v claude 2>/dev/null)" == "$pathg" ]]; then
+    echo "        guard, terminal: installed"
+  else
+    echo "        guard, terminal: MISSING - a terminal launch is not blocked"
+    missing=1
+  fi
+
+  if [[ -x "$deskg" && -f "$entry" ]] \
+     && grep -q "^Exec=$deskg" "$entry" 2>/dev/null; then
+    local n t
+    n=$(grep -c "^Exec=$deskg" "$entry"); t=$(grep -c "^Exec=" "$entry")
+    if [[ "$n" == "$t" ]]; then
+      echo "        guard, desktop:  installed"
+    else
+      echo "        guard, desktop:  PARTIAL - $n of $t launch entries routed"
+      missing=1
+    fi
+  else
+    echo "        guard, desktop:  MISSING - the desktop app is not blocked"
+    missing=1
+  fi
+
+  if (( missing )); then
+    echo
+    echo "        Install what is missing before relying on the boundary:"
+    echo "          \$KIT/tools/install-desktop-guard.sh"
+    echo "        Until then nothing enforces it; it is only remembered."
+  fi
+  return $missing
+}
+
 if mountpoint -q "$MNT" 2>/dev/null; then
   echo "OPEN    $MNT is mounted"
   df -h "$MNT" | tail -1 | awk '{print "        "$3" used, "$4" free ("$5")"}'
@@ -12,7 +62,9 @@ if mountpoint -q "$MNT" 2>/dev/null; then
   t=$(find "$MNT/translated" -type f 2>/dev/null | wc -l)
   echo "        $n source files, $t translated"
   echo
-  echo "        Claude Code will REFUSE to start. Run case-close first."
+  guard_report || true
+  echo
+  echo "        Claude Code should REFUSE to start. Run case-close first."
   exit 0
 fi
 
@@ -25,4 +77,11 @@ else
   echo "        A tool run now would write plaintext to $MNT."
 fi
 echo
-echo "        Safe to start Claude Code."
+if guard_report; then
+  echo
+  echo "        Safe to start Claude Code."
+else
+  echo
+  echo "        Container is closed, so starting Claude Code is safe NOW -"
+  echo "        but nothing would stop you starting it while it is open."
+fi
