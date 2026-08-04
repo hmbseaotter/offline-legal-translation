@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""tr-terms - find terms the model rendered inconsistently, and propose entries.
+
+OPERATOR ONLY, container open. Reads the translation memory, which holds real
+sentences, and its output can contain party names.
+
+Usage:  tr-terms [--min-count N] [--top N] [--write]
+
+  --min-count  a source term must appear in this many segments (default 3)
+  --top        how many candidates to report (default 25)
+  --write      append the accepted lines to the PROJECT glossary
+
+WHAT IT DOES
+
+Walks the memory and reports source terms whose target renderings disagree:
+"pogodba" rendered as "agreement" in twelve segments and "contract" in eight.
+That is the translator's first review finding, and it is the one thing a
+language model cannot fix by itself -- it chooses per segment with no memory
+of what it chose three segments ago, and no decoding setting changes that.
+
+Runs no model. Seconds, over the memory that already exists.
+
+WHAT IT DELIBERATELY DOES NOT DO
+
+It does not write glossary entries on its own. The only evidence available
+during a run is the model's own output, so harvesting that would pin its
+first guess as the agreed rendering -- including the wrong ones, and
+including whichever of two inconsistent renderings happened to be more
+common. Codifying the model's mistakes as terminology is worse than having
+no glossary, because tr-lint would then enforce them.
+
+So this produces a worklist. The translator picks the rendering; --write
+appends what they accepted.
+
+HOW IT FINDS THEM WITHOUT WORD ALIGNMENT
+
+There is no alignment between source and target words, and building one is a
+project in itself. Instead: for a source term, gather every target whose
+source contained it, and count the phrases those targets share. A term with
+one agreed rendering produces one dominant phrase. A term rendered two ways
+produces two, each in a large minority. That is the signal.
+
+It is a heuristic and it will offer some nonsense -- a phrase that merely
+co-occurs, a term that legitimately renders differently by context. False
+positives cost a glance, which is why the output is a list for a person
+rather than an edit to a file.
+
+WHERE ENTRIES GO
+
+The project glossary, inside the container, because a frequent term in a
+prosecution bundle can be a party name. The shared base glossary lives in the
+kit, which is a git repository that gets pushed: promote a line there only
+after reading it and deciding it is general legal vocabulary.
+"""
+import argparse
+import collections
+import os
+import re
+import sqlite3
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "lib"))
+import trlib  # noqa: E402
+
+# Function words carry no terminology and would dominate every count.
+SL_STOP = {
+    "in", "je", "so", "na", "za", "se", "ki", "po", "pri", "od", "do", "iz",
+    "ali", "ter", "pa", "kot", "bo", "bil", "bila", "bilo", "ne", "da", "s",
+    "z", "v", "o", "a", "the", "of", "to", "and", "ta", "te", "ti", "tega",
+    "tem", "tej", "tudi", "lahko", "mora", "sme", "če", "kadar", "vseh",
+}
+EN_STOP = {
+    "the", "of", "to", "and", "a", "an", "in", "on", "for", "with", "by",
+    "is", "are", "was", "were", "be", "been", "shall", "may", "must", "or",
+    "that", "this", "these", "those", "as", "at", "from", "it", "its", "not",
+    "if", "when", "any", "all", "such", "which", "has", "have", "had",
+}
+WORD = re.compile(r"[\wČčŠšŽžĆćĐđ]+", re.UNICODE)
+
+
+def phrases(text, stop, nmax=3):
+    """Content n-grams, lowercased, with stopwords dropped at the edges."""
+    toks = [w.lower() for w in WORD.findall(text)]
+    out = []
+    for n in range(1, nmax + 1):
+        for i in range(len(toks) - n + 1):
+            g = toks[i:i + n]
+            if g[0] in stop or g[-1] in stop:
+                continue
+            if any(t.isdigit() for t in g):
+                continue
+            if len("".join(g)) < 4:
+                continue
+            out.append(" ".join(g))
+    return out
+
+
+def dominant(counter, total):
+    """The leading rendering and its closest rival, if there is a real one."""
+    if not counter:
+        return None, 0, None, 0
+    ranked = counter.most_common()
+    r1, c1 = ranked[0]
+    for r2, c2 in ranked[1:]:
+        # A rival that merely sits inside the leader ("district court" vs
+        # "court") is the same rendering seen at two lengths, not a conflict.
+        if r2 in r1 or r1 in r2:
+            continue
+        return r1, c1, r2, c2
+    return r1, c1, None, 0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--min-count", type=int, default=3,
+                    help="a term must appear in this many segments (default 3)")
+    ap.add_argument("--top", type=int, default=25,
+                    help="how many candidates to report (default 25)")
+    ap.add_argument("--write", action="store_true",
+                    help="append accepted lines to the project glossary")
+    a = ap.parse_args()
+
+    dbp = trlib.path("work", "tm.sqlite")
+    if not os.path.exists(dbp):
+        sys.exit("no translation memory yet - run tr-run first")
+    db = sqlite3.connect(dbp)
+    gloss = trlib.load_glossary()
+    raw = db.execute(
+        "SELECT key, src, tgt, direction FROM tm WHERE model = ? AND "
+        "prompt_version = ?", (trlib.MODEL, trlib.PROMPT_VERSION)).fetchall()
+    db.close()
+
+    # Only what tr-run would reuse today; superseded glossary rows would show
+    # up as disagreement with themselves.
+    rows = [(src, tgt) for key, src, tgt, direction in raw
+            if key == trlib.tm_current_key(src, direction, gloss)]
+    if not rows:
+        sys.exit(f"no segments for model {trlib.MODEL} prompt "
+                 f"{trlib.PROMPT_VERSION} - run tr-run first")
+
+    known = {s.lower() for s, _t in gloss}
+    where = collections.defaultdict(list)
+    for src, tgt in rows:
+        for p in set(phrases(src, SL_STOP)):
+            where[p].append(tgt)
+
+    findings = []
+    for term, targets in where.items():
+        if len(targets) < a.min_count or term in known:
+            continue
+        counts = collections.Counter()
+        for t in targets:
+            counts.update(set(phrases(t, EN_STOP)))
+        r1, c1, r2, c2 = dominant(counts, len(targets))
+        if not r2:
+            continue
+        n = len(targets)
+        # Both must be common enough to be renderings rather than noise, and
+        # between them account for most of the occurrences.
+        if c2 < max(2, n * 0.25) or (c1 + c2) < n * 0.6:
+            continue
+        findings.append((c2, n, term, r1, c1, r2, c2))
+
+    findings.sort(reverse=True)
+    findings = findings[:a.top]
+
+    print(f"  {len(rows)} segments in memory, model {trlib.MODEL} "
+          f"prompt {trlib.PROMPT_VERSION}")
+    print(f"  {len(known)} glossary term(s) already pinned\n")
+    if not findings:
+        print("  No term showed two competing renderings above the thresholds.")
+        print("  Try --min-count 2, or a larger corpus.")
+        return 0
+
+    print("  Terms rendered more than one way. The count is segments, not")
+    print("  occurrences. Pick one rendering per term; the other becomes an")
+    print("  edit the translator would otherwise make by hand every time.\n")
+    print(f"  {'source term':<28} {'seen':>4}  competing renderings")
+    print(f"  {'-'*28} {'-'*4}  {'-'*40}")
+    for _s, n, term, r1, c1, r2, c2 in findings:
+        print(f"  {term[:28]:<28} {n:>4}  {r1[:20]:<20} {c1:>3}   "
+              f"{r2[:20]:<20} {c2:>3}")
+
+    out = trlib.path("glossary", "candidates.tsv")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write("# Candidates from tr-terms. Delete the ones you reject,\n"
+                 "# set the rendering you want in column 2, then append to\n"
+                 "# glossary/project.tsv. Nothing here is agreed until you\n"
+                 "# have read it.\n")
+        fh.write("# source\tchosen rendering\tnote (alternatives seen)\n")
+        for _s, n, term, r1, c1, r2, c2 in findings:
+            fh.write(f"{term}\t{r1}\tseen {n}x: {r1} ({c1}), {r2} ({c2})\n")
+    print(f"\n  candidates: {out}")
+    print("  These are proposals from the model's own output, not agreed")
+    print("  terminology. Read each one before it becomes a rule tr-lint")
+    print("  enforces.")
+
+    if a.write:
+        proj = trlib.path("glossary", "project.tsv")
+        with open(proj, "a", encoding="utf-8") as fh:
+            for _s, n, term, r1, c1, r2, c2 in findings:
+                fh.write(f"{term}\t{r1}\tfrom tr-terms, unreviewed\n")
+        print(f"\n  appended {len(findings)} line(s) to {proj}")
+        print("  Marked unreviewed. Read them before the next run, because")
+        print("  tr-lint will now report every draft that disagrees.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
