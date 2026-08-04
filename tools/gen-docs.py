@@ -119,6 +119,121 @@ def check_registry_against_code():
     return problems
 
 
+def tool_reference():
+    """Usage and flags for every command, read out of the tools themselves.
+
+    Hand-written reference goes stale the moment a flag is added -- which is
+    how --strict, --limit, --gate and --pin-all all came to exist in argparse
+    and nowhere a user would look. Reading it from the source means the
+    reference cannot disagree with the program.
+
+    Python tools give their flags to argparse with help text, so those are
+    parsed from the syntax tree. Shell tools have no such structure; their
+    header comment is what there is, so the Usage line is taken verbatim and
+    the flags live in it.
+    """
+    import ast
+    out = []
+    for sub in ("bin", "tools"):
+        d = os.path.join(KIT, sub)
+        for name in sorted(os.listdir(d)):
+            path = os.path.join(d, name)
+            if not os.path.isfile(path) or name.endswith((".tsv", ".pyc")):
+                continue
+            try:
+                src = open(path, encoding="utf-8").read()
+            except OSError:
+                continue
+            if not src.startswith("#!"):
+                continue
+
+            # One-line summary: "name - what it does", from the docstring or
+            # the first comment line.
+            summary = ""
+            lines = src.splitlines()
+            for i, ln in enumerate(lines):
+                m = re.match(r'^(?:"""|#\s*)' + re.escape(name) + r'\s*[-–—]\s*(.+)$',
+                             ln)
+                if not m:
+                    continue
+                summary = m.group(1).strip().rstrip('"')
+                # A header comment wraps. Without following it, case-guard was
+                # described as "wrapper that refuses to launch Claude Code
+                # while the case" -- cut mid-clause, which reads as a bug in
+                # the tool rather than in the reference.
+                is_py = src.startswith("#!/usr/bin/env python3")
+                for cont in lines[i + 1:i + 4]:
+                    if summary.endswith((".", "?", "!")):
+                        break
+                    raw = cont.strip()
+                    # Only across the comment block itself. case-status ends
+                    # its summary with "?", so without this the loop ran on
+                    # into the script and documented the tool as
+                    # "... safe to start Claude Code? set -uo pipefail".
+                    if not (raw.startswith("#") or (is_py and '"""' not in raw)):
+                        break
+                    c = raw.lstrip("#").strip().rstrip('"')
+                    if not c or c.startswith("Usage"):
+                        break
+                    summary += " " + c
+                break
+
+            usage = [l.strip().lstrip("#").strip()
+                     for l in src.splitlines()
+                     if re.match(r'^\s*#?\s*(Usage|usage):', l)]
+            usage = [u for u in usage if u]
+
+            flags = []
+            if src.startswith("#!/usr/bin/env python3"):
+                try:
+                    tree = ast.parse(src)
+                except SyntaxError:
+                    tree = None
+                for node in ast.walk(tree) if tree else []:
+                    if (isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "add_argument"):
+                        names = [a.value for a in node.args
+                                 if isinstance(a, ast.Constant)
+                                 and isinstance(a.value, str)]
+                        opt = [n for n in names if n.startswith("-")]
+                        if not opt:
+                            continue
+                        help_txt = ""
+                        for kw in node.keywords:
+                            if kw.arg == "help" and isinstance(kw.value, ast.Constant):
+                                help_txt = str(kw.value.value)
+                            elif kw.arg == "help" and isinstance(kw.value, ast.JoinedStr):
+                                help_txt = "".join(
+                                    v.value for v in kw.value.values
+                                    if isinstance(v, ast.Constant))
+                        flags.append((" / ".join(opt), help_txt))
+            out.append((f"{sub}/{name}" if sub == "tools" else name,
+                        summary, usage, flags))
+    return out
+
+
+def reference_md():
+    lines = []
+    for name, summary, usage, flags in tool_reference():
+        lines.append(f"### `{name}`")
+        lines.append("")
+        if summary:
+            lines.append(summary)
+            lines.append("")
+        for u in usage:
+            lines.append(f"    {u}")
+        if usage:
+            lines.append("")
+        if flags:
+            lines.append("| Flag | Meaning |")
+            lines.append("|---|---|")
+            for f, h in flags:
+                lines.append(f"| `{f}` | {h or '—'} |")
+            lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def write_docx_env(path, rows, apply):
     """Rewrite section 12's table in the primary document.
 
@@ -190,6 +305,21 @@ def main():
         (os.path.join(KIT, "CLAUDE.md"), [("env", env_md), ("tools", tools_md)]),
         (os.path.join(DOCS, "01-operating-manual.md"), [("env", env_md)]),
     ]
+
+    # The runbook is written whole rather than patched between markers: its
+    # prose half lives in docs-src/ and its reference half is read out of the
+    # tools, so there is nothing in the output file for a person to edit and
+    # nothing to preserve.
+    intro = os.path.join(KIT, "docs-src", "runbook-intro.md")
+    runbook = os.path.join(DOCS, "04-runbook.md")
+    if os.path.exists(intro) and os.path.isdir(DOCS):
+        body = open(intro, encoding="utf-8").read().rstrip() + "\n\n" \
+            + reference_md() + "\n"
+        cur = open(runbook, encoding="utf-8").read() if os.path.exists(runbook) else ""
+        if cur != body:
+            drift.append("04-runbook.md: out of date")
+            if a.apply:
+                open(runbook, "w", encoding="utf-8").write(body)
 
     for path, regions in targets:
         if not os.path.exists(path):
