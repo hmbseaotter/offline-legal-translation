@@ -201,7 +201,7 @@ fi
 echo
 
 started=$(date +%s)
-done_n=0; skip_n=0; fail_n=0
+done_n=0; skip_n=0; fail_n=0; seen_n=0
 
 while IFS=$'\t' read -r _rel _tgt; do
   [[ -n "$_rel" ]] && TARGET["$_rel"]="$_tgt"
@@ -209,34 +209,42 @@ done < <(name_batch)
 
 for rel in "${FILES[@]}"; do
   [[ -z "$rel" ]] && continue
+  ((seen_n++))
+  at="[$seen_n/${#FILES[@]}]"
   in="$SRC/$rel"
   out="${TARGET[$rel]:-}"
-  [[ -n "$out" ]] || { echo "skip   $rel  (no deliverable name)"; ((skip_n++)); continue; }
+  [[ -n "$out" ]] || { echo "skip   $at $rel  (no deliverable name)"; ((skip_n++)); continue; }
   ext="${rel##*.}"; ext="${ext,,}"
   worker="$(worker_for "$ext")"
 
   # Decided before anything is promised, so -n cannot announce work the
   # real run will then refuse to do.
   if [[ -z "$worker" ]]; then
-    echo "skip   $rel  (unsupported extension: $ext)"; ((skip_n++)); continue
+    echo "skip   $at $rel  (unsupported extension: $ext)"; ((skip_n++)); continue
   fi
   if [[ -f "$out" && "$out" -nt "$in" ]]; then
     if deliv_current "$rel"; then
-      echo "skip   $rel"; ((skip_n++)); continue
+      echo "skip   $at $rel"; ((skip_n++)); continue
     fi
     # Up to date against its source, but produced by a different model or a
     # superseded prompt. Say which, because "redo" with no reason reads like
     # the cache failing. Segments the memory still holds are reused, so this
     # is only expensive when the version actually moved.
     was="$(awk -F'\t' -v r="$rel" 'NR>1 && $1==r {print $2" "$3; exit}' "$DELIV" 2>/dev/null)"
-    echo "redo   $rel  (${was:-provenance unrecorded} -> $MODEL_NOW $PROMPT_NOW)"
+    echo "redo   $at $rel  (${was:-provenance unrecorded} -> $MODEL_NOW $PROMPT_NOW)"
   fi
   if [[ $DRY -eq 1 ]]; then
-    echo "would  $rel  ($ext)  ->  ${out#"$OUT"/}"; continue
+    echo "would  $at $rel  ($ext)  ->  ${out#"$OUT"/}"; continue
   fi
 
   mkdir -p "$(dirname "$out")"
-  echo "=== $rel" | tee -a "$LOG"
+  # Stamped and counted. A run over a real drop takes hours and is left
+  # overnight, so "which file is this and when did it start" is the first
+  # question on coming back to the terminal -- and with 89 files the
+  # position in the list says how much is left. The date is there because
+  # these runs cross midnight.
+  echo "=== $at $(date '+%Y-%m-%d %H:%M:%S')  $rel" \
+       | tee -a "$LOG"
   t0=$(date +%s)
 
   "$worker" "$in" "$out" 2>&1 | tee -a "$LOG"
