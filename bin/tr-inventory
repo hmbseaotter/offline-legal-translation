@@ -274,6 +274,9 @@ def main():
     ap.add_argument("--count", action="store_true",
                     help="read every file in full and count words and "
                          "segments, for estimating the volume of work")
+    ap.add_argument("--accept-revisions", action="store_true",
+                    help="take the detector's verdict wherever it disagrees "
+                         "with the recorded language, without asking")
     ap.add_argument("--with-ocr", action="store_true",
                     help="with --count, run the real OCR pass on scanned PDFs "
                          "instead of listing them as needing it. Slow, and "
@@ -297,8 +300,19 @@ def main():
     os.makedirs(os.path.join(outdir, "by-lang"), exist_ok=True)
     manifest = os.path.join(outdir, "manifest.tsv")
 
+    # Loaded even with --rescan. --rescan means "examine the files again",
+    # not "discard what I told you": a hand-set language is a decision, not a
+    # scan result, and throwing it away on a re-scan is the same silent loss
+    # the manual marker exists to prevent. The reuse shortcut below is what
+    # --rescan actually disables.
+    # Always loaded, --rescan or not. --rescan means "examine the files
+    # again", not "forget what I told you": it disables the reuse shortcut
+    # below, and nothing else. Dropping the manifest entirely made a re-scan
+    # revert every hand-corrected language without a word, which is the same
+    # silent loss this whole path exists to prevent -- and tr-inventory
+    # recommends --rescan in its own output.
     prior = {}
-    if os.path.exists(manifest) and not a.rescan:
+    if os.path.exists(manifest):
         with open(manifest, encoding="utf-8") as fh:
             for row in csv.DictReader(fh, delimiter="\t"):
                 prior[row["path"]] = row
@@ -318,7 +332,7 @@ def main():
     if a.limit:
         files, deferred = files[:a.limit], files[a.limit:]
 
-    rows, reused = [], 0
+    rows, reused, revised, proposals = [], 0, set(), []
     for i, rel in enumerate(files, 1):
         full = os.path.join(src, rel)
         st = os.stat(full)
@@ -328,7 +342,8 @@ def main():
         # A row counted earlier is reusable; one that was only sampled is not,
         # when counting is what was asked for.
         counted = old.get("words", "") not in ("", "-") if old else False
-        if old and old.get("method") != "not-yet-examined" \
+        if old and not a.rescan \
+                and old.get("method") != "not-yet-examined" \
                 and old.get("bytes") == str(st.st_size) \
                 and old.get("mtime") == f"{st.st_mtime:.0f}" \
                 and (counted or not a.count):
@@ -344,9 +359,27 @@ def main():
                 # bilingual bank statement is the usual case. Say so rather
                 # than letting the language change between two runs of what
                 # looks like the same command.
-                if old and old.get("lang") and old["lang"] != lang:
-                    note = ((note + "; ") if note else "") + \
-                        f"language revised from {old['lang']} on the full text"
+                # A recorded language WINS by default, and a disagreement
+                # becomes a question rather than an edit.
+                #
+                # Counting reads the whole file where triage read 400 words,
+                # so the detector can legitimately do better -- but the
+                # recorded value may equally be a decision someone made after
+                # opening the file, and overwriting that silently discarded an
+                # afternoon of resolving undetermined files. Worse, the
+                # detector's "better" verdict is sometimes "unknown", which
+                # drops the file out of the translation set entirely.
+                if (old and old.get("lang") and old["lang"] != lang
+                        and old.get("method") != "manual"):
+                    proposals.append((rel, old["lang"], lang))
+                    if not a.accept_revisions:
+                        lang = old["lang"]
+                        try:
+                            conf = float(old.get("confidence") or 0.0)
+                        except ValueError:
+                            conf = 0.0
+                        note = ((note + "; ") if note else "") + \
+                            "detector disagreed; recorded language kept"
             elif a.count and old and old.get("lang") not in (None, "", "unknown"):
                 # Could not COUNT it -- which is not the same as not knowing
                 # what language it is. A scanned PDF that triage identified
@@ -362,6 +395,27 @@ def main():
                 note = method
             else:
                 lang, conf, note = "unknown", 0.0, method
+            # A language set by hand outranks the detector, permanently.
+            #
+            # The operator opened the file and read it; trlang saw a sample
+            # and guessed. Yet re-running with --count rebuilt every row from
+            # the detector, so a morning spent resolving ten undetermined
+            # files was discarded by the next command in the documented
+            # procedure -- silently, because the manifest looked freshly
+            # written either way.
+            #
+            # Mark a row by setting its method column to "manual". Everything
+            # else about it is still refreshed: word counts, segments, size
+            # and mtime. Only the language is left alone.
+            if old and old.get("method") == "manual":
+                lang = old.get("lang") or lang
+                try:
+                    conf = float(old.get("confidence") or 1.0)
+                except ValueError:
+                    conf = 1.0
+                method = "manual"
+                note = old.get("note") or "language set by hand"
+                revised.discard(rel)
             row = {"path": rel, "ext": ext, "bytes": str(st.st_size),
                    "mtime": f"{st.st_mtime:.0f}", "lang": lang,
                    "confidence": f"{conf:.2f}", "method": method,
@@ -380,6 +434,47 @@ def main():
         sys.stderr.write(f"\r  {i}/{len(files)} ")
         sys.stderr.flush()
     sys.stderr.write("\n")
+
+    # Asked here rather than mid-loop: the scan can be an hour of OCR, and a
+    # prompt buried in it is a prompt nobody sees until the run has stalled
+    # waiting for an answer.
+    #
+    # The default is always to keep what is recorded. The detector may well be
+    # right -- reading a whole file beats sampling 400 words of it -- but it
+    # is equally often proposing "unknown", which would drop the file out of
+    # the translation set, and the recorded value may be a decision somebody
+    # made with the document open in front of them.
+    if proposals and not a.accept_revisions:
+        by_path = {r["path"]: r for r in rows}
+        print()
+        print(f"  {len(proposals)} file(s): the detector disagrees with the "
+              f"recorded language.")
+        print("  Nothing has been changed. Answer y to take the detector's "
+              "verdict for that file.\n")
+        interactive = sys.stdin.isatty()
+        for rel, was, now in proposals:
+            label = f"{was} -> {now}" + ("   (would drop it from translation)"
+                                         if now in ("unknown", "") else "")
+            if not interactive:
+                print(f"    kept {was:<4}  {rel}   detector said {now}")
+                continue
+            try:
+                ans = input(f"    {rel}\n      {label}   change? [y/N] ")
+            except (EOFError, KeyboardInterrupt):
+                print("\n  stopped asking; everything recorded is kept")
+                break
+            if ans.strip().lower() == "y":
+                r = by_path.get(rel)
+                if r:
+                    r["lang"] = now
+                    r["note"] = "language changed on the full text, confirmed"
+                    revised.add(rel)
+        if not interactive:
+            print("\n  Not a terminal, so nothing was asked and nothing "
+                  "changed. To accept them all:")
+            print("      tr-inventory --count --accept-revisions")
+        print("\n  To stop a file being asked about again, put 'manual' in "
+              "its method column.")
 
     # Carry forward everything the limit deferred, so the manifest still
     # describes the whole drop. Files never yet examined are recorded as
@@ -516,6 +611,12 @@ def main():
         fh.write(summary)
 
     print(summary)
+    # A language that changed between two runs of the same command is exactly
+    # what an operator will not spot in a forty-row TSV, and it decides
+    # whether the file is translated at all.
+    if revised:
+        print(f"{len(revised)} file(s) had their language changed, with your "
+              f"confirmation.")
     if reused:
         print(f"({reused} unchanged file(s) reused from the previous scan; "
               f"--rescan to redo)")

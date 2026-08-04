@@ -46,9 +46,25 @@ Croatian/Serbian and whatever else, and pushing a Croatian file through an
 sl→en prompt wastes the inference *and* caches a wrong answer that is reused
 silently from then on.
 
-Read `work/inventory/by-lang/unknown.txt` and re-run after correcting
-anything misfiled. Files not in the source language are out of scope for
-work and for billing.
+Read `work/inventory/by-lang/unknown.txt`. Files not in the source language
+are out of scope for work and for billing.
+
+**Correcting a language, so it stays corrected.** Edit the `lang` column in
+`work/inventory/manifest.tsv`, and set that row's `method` column to
+`manual`. A row marked `manual` is never re-detected — every later run
+refreshes its size, word count and segments but leaves the language alone.
+
+Without the marker your correction still survives, but as a preference
+rather than a decision: the next run that re-reads the file will notice the
+detector disagrees and **ask** before changing anything. The recorded
+language always wins by default, including when you answer nothing, because
+the detector's alternative verdict is often `unknown` — which would drop the
+file out of the translation set entirely.
+
+`--rescan` re-examines every file but does not discard your corrections; it
+proposes, like any other run. `--accept-revisions` takes the detector's
+verdict everywhere without asking, which is for scripts, not for a drop you
+have curated.
 
 **4. OCR everything and count the words.**
 
