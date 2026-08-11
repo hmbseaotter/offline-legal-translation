@@ -40,17 +40,51 @@ def main():
                     continue
                 if not isinstance(cell.value, str):
                     continue
+                # A formula is not text to translate, it is code. openpyxl
+                # hands back the formula source ("=SUM(B1:B9)"), which
+                # is_translatable happily accepts because it contains letters
+                # -- so it went to the model and came back as prose, and the
+                # cell stopped being a formula. On a financial exhibit that
+                # silently destroys the arithmetic the document is about.
+                #
+                # The computed value is not translated either, and cannot be:
+                # writing a translation into the cell would overwrite the
+                # formula. Anything derived stays derived.
+                if cell.data_type == "f" or cell.value.lstrip().startswith("="):
+                    continue
                 v = cell.value.strip()
                 if not trlib.is_translatable(v):
                     continue
                 targets.append(cell)
                 counter[v] += 1
 
+    # What a cell walk does not reach, said once where it is measured rather
+    # than left for the reviewer to discover in the deliverable:
+    #
+    #   sheet (tab) names   Prihodki stays Prihodki. Renaming them would
+    #                       break every formula that references a sheet by
+    #                       name, so it is a decision, not an oversight.
+    #   cell comments       openpyxl carries them through untouched.
+    #   headers and footers  likewise.
+    #   text boxes, shapes, chart titles  not part of the cell grid at all.
+    #
+    # All of it is Slovene in an English deliverable, and all of it is
+    # visible to whoever opens the file.
     uniq = list(counter)
     total = len(targets)
+    skipped = []
+    if any(ws.title for ws in wb.worksheets):
+        skipped.append(f"{len(wb.worksheets)} sheet name(s)")
+    ncom = sum(1 for ws in wb.worksheets for row in ws.iter_rows()
+               for c in row if getattr(c, "comment", None))
+    if ncom:
+        skipped.append(f"{ncom} cell comment(s)")
     ratio = (len(uniq) / total) if total else 0
     print(f"  text cells: {total:,}   unique: {len(uniq):,}   ratio: {ratio:.1%}",
           file=sys.stderr)
+    if skipped:
+        print(f"  not translated: {', '.join(skipped)} - a cell walk does not "
+              f"reach them", file=sys.stderr)
 
     if a.survey or not a.out:
         print("\n  most repeated values:", file=sys.stderr)
