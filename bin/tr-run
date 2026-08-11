@@ -171,9 +171,33 @@ elif [[ -f "$MANIFEST" && $ALL -eq 0 ]]; then
   mapfile -t FILES < <(awk -F'\t' -v w="$want" -v p="$c_path" -v l="$c_lang" \
                         'NR>1 && $l==w {print $p}' "$MANIFEST" | sort)
   HELD=$(awk -F'\t' -v w="$want" -v l="$c_lang" 'NR>1 && $l!=w' "$MANIFEST" | wc -l)
+  # A file on disk the manifest has never seen is invisible: not translated,
+  # not held back by triage, not counted anywhere. It simply does not appear,
+  # and the run looks complete. For a deliverable that is the worst failure
+  # this pipeline can have -- a document missing from what you hand over,
+  # with nothing in the output to say so.
+  #
+  # It happens the ordinary way: a file is added to source/ after the last
+  # tr-inventory, and tr-run works from the manifest rather than from disk.
+  UNSEEN=$(comm -23 \
+    <(cd "$SRC" && find . -type f ! -name '~$*' ! -name '.*' -printf '%P\n' \
+        2>/dev/null | LC_ALL=C sort) \
+    <(awk -F'\t' -v p="$c_path" 'NR>1{print $p}' "$MANIFEST" | LC_ALL=C sort))
 else
   mapfile -t FILES < <(cd "$SRC" && find . -type f ! -name '~$*' ! -name '.*' \
                         -printf '%P\n' | sort)
+fi
+
+if [[ -n "${UNSEEN:-}" ]]; then
+  {
+    echo
+    echo "  $(printf '%s\n' "$UNSEEN" | grep -c .) file(s) in source/ are NOT in the manifest."
+    echo "  They will not be translated and will not be mentioned again:"
+    printf '%s\n' "$UNSEEN" | sed 's/^/      /'
+    echo
+    echo "  Run tr-inventory first so they are classified, then tr-run."
+    echo
+  } >&2
 fi
 
 cat <<BANNER

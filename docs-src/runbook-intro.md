@@ -144,6 +144,11 @@ is legible, not verified.
 
     tr-run
 
+`tr-run` works from the **manifest**, not from a directory walk — so a file
+added to `source/` after the last `tr-inventory` is invisible to it. Re-run
+step 3 whenever you add anything. `tr-run` now names any file it finds on
+disk that the manifest has never seen, rather than leaving it out silently.
+
 Resumable at two levels: it skips files already delivered, and within a file
 every segment already in the memory is reused. Interrupting it costs at most
 one segment. It re-translates a file whose source is newer than its output,
