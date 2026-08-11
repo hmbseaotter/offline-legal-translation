@@ -9,7 +9,7 @@ repository cannot be installed at all.
 
 ```bash
 export KIT=~/Claude_Stuff/cli_projects/translation-tools
-git clone git@github.com:hmbseaotter/offline-translation-kit.git "$KIT"
+git clone git@github.com:hmbseaotter/offline-legal-translation.git "$KIT"
 chmod +x "$KIT"/bin/*
 
 # adjust the username in the deny paths to match your account
