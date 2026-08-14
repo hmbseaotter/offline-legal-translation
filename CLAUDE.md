@@ -153,11 +153,13 @@ Do not change these without discussing with the operator first.
    client requirement and the basis of `tr-status`. Optional `TR_SUFFIX`.
    The one exception is the extension: a scanned PDF cannot be regenerated
    as a PDF and plain text has no formatting to preserve, so both deliver a
-   `.docx`. That mapping lives in `OUT_EXT` / `trlib.target_name()` and is
-   mirrored by `out_ext_for()` in `bin/tr-run`. **Both must agree** — when
-   they did not, `tr-run` wrote `x.docx` while `tr-status` looked for
-   `x.pdf`, so every PDF reported as missing and its output as orphaned,
-   permanently.
+   `.docx`. That mapping lives in `OUT_EXT` / `trlib.target_name()`, and
+   `bin/tr-run` calls it rather than restating it. It used to keep its own
+   `out_ext_for()`, with a comment on each side reminding the other to stay
+   equal — and when they drifted, `tr-run` wrote `x.docx` while `tr-status`
+   looked for `x.pdf`, so every PDF reported as missing and its output as
+   orphaned, permanently. A rule needing a comment to keep two copies in
+   step is a rule living in the wrong number of places.
 2. **The client drop is not a clean corpus, and its shape is preserved.**
    Files arrive as nested folder trees — often several separate drops — and
    that structure is carried through `source/` to `translated/` untouched;
@@ -194,10 +196,13 @@ Do not change these without discussing with the operator first.
    that, every date in the corpus raised a NUM finding and buried the real
    ones. German is not English here: it keeps the 24-hour clock and writes
    `5. März 2024`, so verify that pair before extending to it.
-   Two files hold the prompt — `prompts/translate.txt` (the seed `case-init`
-   copies into `_shared/`) and `_DEFAULT_PROMPT` in `lib/trlib.py` (the
-   fallback). **They must say the same thing**, and changing either means
-   bumping `TR_PROMPT_VERSION` under invariant 7.
+   One file holds the prompt: `prompts/translate.txt`, read from the kit by
+   `trlib.build_prompt()`. A missing file is a loud refusal, not a silent
+   fallback. Changing it means bumping `TR_PROMPT_VERSION` under invariant 7.
+   It was two — a `_DEFAULT_PROMPT` constant in `lib/trlib.py` as well, with
+   a note here that they must agree. Nothing read the shipped file at all, so
+   they were identical by luck, and the first edit to either would have made
+   the shipped copy a lie about what the model is told.
 6. **A completed provision is an interpretation, not a translation.** Asked
    to translate a source that quotes a statute or treaty and stops short of
    the famous continuation, the model supplies the rest from memory —

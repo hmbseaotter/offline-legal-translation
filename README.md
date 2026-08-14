@@ -59,8 +59,15 @@ fabrication into a visible instruction to go and read the page.
 **Legibility is not correctness.** A confidence floor cannot catch
 `12.450,00` misread as `1248000` — that scores 86% and reads as a fact all
 the way to the deliverable. Only a second engine reading the same page finds
-it, which is what `ocr-check.py` is for, and why it reports genuine
-disagreements separately from formatting differences.
+it, which is what `ocr-check.py` is for: Tesseract and a local vision model
+(`deepseek-ocr:3b`, through the same Ollama instance — nothing leaves the
+machine) read each page independently, and their number sets are compared.
+It separates genuine disagreements from formatting differences, and
+deliberately picks no winner — neither engine is authoritative, so a
+disagreement is a page for a person to read, not a vote to settle. The
+pipeline's text layer still comes from Tesseract, where the per-word
+confidence lives; the second read exists to locate doubt, not to replace
+it.
 
 **Not everything is a scan.** A born-digital PDF already carries exact text;
 rasterising and re-reading it can only introduce errors that were never in

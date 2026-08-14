@@ -128,9 +128,10 @@ _load_project_conf()
 
 # Output extension by source extension. A scanned PDF cannot be regenerated
 # as a PDF and plain text has no formatting to preserve, so both deliver a
-# .docx. bin/tr-run mirrors this table in out_ext_for() -- the two must
-# agree, or tr-run writes one name and tr-status looks for another and every
-# affected file reports as missing forever.
+# .docx. bin/tr-run calls target_name() rather than keeping its own copy of
+# this table. It used to keep one, and when they drifted tr-run wrote one
+# name while tr-status looked for another, so every affected file reported as
+# missing forever.
 #
 # Macro-enabled and template workbooks deliver as a plain .xlsx. openpyxl
 # reads them all, but writing one back drops the macro project unless it is
