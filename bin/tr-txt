@@ -51,7 +51,10 @@ def main():
         if trlib.is_translatable(u):
             out = first.apply(bysrc[u])
         else:
-            out = u
+            # Not model work, but a date, amount or time standing alone is
+            # still converted to the target's convention; anything else
+            # comes back unchanged.
+            out = trlib.localize(u, a.src, a.tgt)
         if a.bilingual:
             p = doc.add_paragraph()
             r = p.add_run(trlib.xml_safe(u))

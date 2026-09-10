@@ -84,7 +84,12 @@ def main():
     doc = docx.Document(a.inp)
 
     pars = [p for p in iter_paragraphs(doc) if p.text.strip()]
-    todo = [p for p in pars if trlib.is_translatable(p.text)]
+    # A paragraph or table cell holding only a date, an amount or a time is
+    # not verbatim: it goes through ollama_translate(), which converts it to
+    # the target's convention without calling the model. Filtering on
+    # is_translatable() alone left such cells in the source's format.
+    todo = [p for p in pars if trlib.is_translatable(p.text)
+            or trlib.localize(p.text.strip(), a.src, a.tgt) != p.text.strip()]
     print(f"  {os.path.basename(a.inp)}: {len(pars)} paragraphs, "
           f"{len(todo)} translatable", file=sys.stderr)
 

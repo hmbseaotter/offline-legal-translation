@@ -53,7 +53,14 @@ def main():
                 if cell.data_type == "f" or cell.value.lstrip().startswith("="):
                     continue
                 v = cell.value.strip()
-                if not trlib.is_translatable(v):
+                # A cell holding only a date, an amount or a time is not
+                # model work, and it is not verbatim either: the translator
+                # wants it in the target's convention. Skipping every cell
+                # is_translatable() rejects meant localize() never saw one,
+                # so a 12.450,00 EUR column reached the English deliverable
+                # unconverted while the same figure in prose was converted.
+                if (not trlib.is_translatable(v)
+                        and trlib.localize(v, a.src, a.tgt) == v):
                     continue
                 targets.append(cell)
                 counter[v] += 1
@@ -82,6 +89,12 @@ def main():
     ratio = (len(uniq) / total) if total else 0
     print(f"  text cells: {total:,}   unique: {len(uniq):,}   ratio: {ratio:.1%}",
           file=sys.stderr)
+    # Dates, amounts and times are converted in code, so they cost no model
+    # time and must not be counted as if they did.
+    values = [v for v in uniq if not trlib.is_translatable(v)]
+    if values:
+        print(f"  of the unique strings, {len(values):,} are dates, amounts or "
+              f"times, converted without the model", file=sys.stderr)
     if skipped:
         print(f"  not translated: {', '.join(skipped)} - a cell walk does not "
               f"reach them", file=sys.stderr)
@@ -94,13 +107,15 @@ def main():
         # -- see trlib.SEC_PER_SEGMENT for why that distinction was worth
         # ~5x. Short cells are cheaper, but only by the generation part.
         sps, measured = trlib.sec_per_segment()
-        est = len(uniq) * sps / 3600
+        model_work = len(uniq) - len(values)
+        model_cells = total - sum(counter[v] for v in values)
+        est = model_work * sps / 3600
         basis = (f"measured for {trlib.MODEL}" if measured else
                  f"not measured for {trlib.MODEL or 'this pair'}; slowest "
                  f"figure there is")
         print(f"\n  rough translation time at {sps:.0f}s/segment "
               f"({basis}): {est:.1f} h "
-              f"(vs {total * sps / 3600:.0f} h without dedup)",
+              f"(vs {model_cells * sps / 3600:.0f} h without dedup)",
               file=sys.stderr)
         return
 
