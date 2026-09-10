@@ -62,6 +62,9 @@ def main():
             r.font.color.rgb = RGBColor(0x7F, 0x7F, 0x7F)
         doc.add_paragraph(trlib.xml_safe(out))
 
+    if trlib.REF_HITS:
+        print(f"  {trlib.REF_HITS} segment(s) taken from reference translations",
+              file=sys.stderr)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     doc.save(a.out)
     print(f"  -> {a.out}", file=sys.stderr)

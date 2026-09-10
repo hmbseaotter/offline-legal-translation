@@ -4,13 +4,22 @@
 OPERATOR ONLY, container open. Reads the translation memory, which holds real
 sentences, and its output can contain party names.
 
-Usage:  tr-terms [--min-count N] [--top N] [--pin-all] [--write]
+Usage:  tr-terms [--min-count N] [--top N] [--pin-all] [--write] [--reference]
 
   --min-count  a source term must appear in this many segments (default 3)
   --top        how many candidates to report (default 25)
   --pin-all    propose every frequent term with a clear rendering, not only
                the ones already disagreeing
   --write      append the proposed lines to the PROJECT glossary
+  --reference  read the sentence pairs tr-ref kept from reference
+               translations, instead of the model's drafts
+
+WITH --reference
+
+The candidates then come from a certifying translator's own renderings
+rather than from the model's first guesses, which removes the objection
+below at its root. Run it before the first tr-run where references exist:
+terms pinned from them steer every draft the model still has to write.
 
 WHAT IT DOES
 
@@ -89,7 +98,21 @@ EN_STOP = {
     "that", "this", "these", "those", "as", "at", "from", "it", "its", "not",
     "if", "when", "any", "all", "such", "which", "has", "have", "had",
 }
-WORD = re.compile(r"[\wČčŠšŽžĆćĐđ]+", re.UNICODE)
+DE_STOP = {
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "eines",
+    "einem", "einen", "und", "oder", "zu", "zur", "zum", "von", "vom", "mit",
+    "im", "in", "am", "an", "auf", "aus", "bei", "für", "ist", "sind", "war",
+    "wurde", "wurden", "werden", "wird", "hat", "haben", "hatte", "als",
+    "auch", "nicht", "dass", "sich", "es", "er", "sie", "wir", "nach", "über",
+    "unter", "durch", "gegen", "ohne", "um", "bis", "sowie", "diese", "dieser",
+    "dieses", "jede", "jeder", "jedes", "kann", "muss", "soll", "darf",
+}
+# Function words by language, so the source side and the target side are each
+# stripped of their own. The two sets used to be fixed as Slovene source and
+# English target, which for English->German would strip nothing from the
+# German and flood the candidates with der, die and das.
+STOP = {"sl": SL_STOP, "en": EN_STOP, "de": DE_STOP}
+WORD = re.compile(r"[\wČčŠšŽžĆćĐđÄäÖöÜüß]+", re.UNICODE)
 
 
 def phrases(text, stop, nmax=3):
@@ -154,13 +177,37 @@ def main():
                     help="propose an entry for every frequent term with a "
                          "clear rendering, not only the ones already "
                          "disagreeing")
+    ap.add_argument("--reference", action="store_true",
+                    help="read the sentence pairs tr-ref kept from reference "
+                         "translations, instead of the model's drafts")
     a = ap.parse_args()
+
+    src_lang = os.environ.get("TR_SRC", "sl")
+    tgt_lang = os.environ.get("TR_TGT", "en")
+    sstop = STOP.get(src_lang, EN_STOP)
+    tstop = STOP.get(tgt_lang, EN_STOP)
+    gloss = trlib.load_glossary()
+
+    if a.reference:
+        refp = trlib.path("work", "reference.sqlite")
+        if not os.path.exists(refp):
+            sys.exit("no reference pairs yet - put the files in reference/ "
+                     "and run tr-ref first")
+        rdb = sqlite3.connect(refp)
+        rows = rdb.execute("SELECT src, tgt FROM pairs WHERE direction = ?",
+                           (f"{src_lang}-{tgt_lang}",)).fetchall()
+        rdb.close()
+        if not rows:
+            sys.exit(f"tr-ref kept no {src_lang}-{tgt_lang} sentence pairs - "
+                     f"see work/reference/rejected.tsv for why")
+        return harvest(a, rows, gloss, sstop, tstop,
+                       "from reference translations",
+                       "from reference translations via tr-terms, unreviewed")
 
     dbp = trlib.path("work", "tm.sqlite")
     if not os.path.exists(dbp):
         sys.exit("no translation memory yet - run tr-run first")
     db = sqlite3.connect(dbp)
-    gloss = trlib.load_glossary()
     # The key carries the model and prompt version routed for each row's
     # direction, so matching it is the whole filter.
     raw = db.execute("SELECT key, src, tgt, direction FROM tm").fetchall()
@@ -200,6 +247,13 @@ def main():
             msg.append("The memory is empty - run tr-run first.")
         sys.exit("\n".join(msg))
 
+    return harvest(a, rows, gloss, sstop, tstop,
+                   f"model {trlib.MODEL} prompt {trlib.PROMPT_VERSION}",
+                   "from tr-terms, unreviewed")
+
+
+def harvest(a, rows, gloss, sstop, tstop, origin, note):
+    """Find and report candidates over (source, target) pairs."""
     # A segment the model returned unchanged carries no evidence about
     # terminology, and it actively poisons it: with the whole segment still
     # in Slovene, the phrase counter offers one Slovene word as the
@@ -218,7 +272,7 @@ def main():
     known = {s.lower() for s, _t in gloss}
     where = collections.defaultdict(list)
     for src, tgt in rows:
-        for p in set(phrases(src, SL_STOP)):
+        for p in set(phrases(src, sstop)):
             where[p].append(tgt)
 
     # How often each target phrase occurs across the WHOLE corpus. A phrase
@@ -227,7 +281,7 @@ def main():
     # as terminology.
     globals_ = collections.Counter()
     for _src, tgt in rows:
-        globals_.update(set(phrases(tgt, EN_STOP)))
+        globals_.update(set(phrases(tgt, tstop)))
     total = len(rows)
 
     findings = []
@@ -236,7 +290,7 @@ def main():
             continue
         counts = collections.Counter()
         for t in targets:
-            counts.update(set(phrases(t, EN_STOP)))
+            counts.update(set(phrases(t, tstop)))
         r1, c1, r2, c2 = dominant(counts, len(targets))
         n = len(targets)
 
@@ -282,8 +336,7 @@ def main():
         kept.append(f)
     findings = kept[:a.top]
 
-    print(f"  {len(rows)} translated segment(s), model {trlib.MODEL} "
-          f"prompt {trlib.PROMPT_VERSION}")
+    print(f"  {len(rows)} translated segment(s), {origin}")
     if echoed:
         print(f"  {echoed} segment(s) came back unchanged and were excluded "
               f"- they carry no terminology")
@@ -337,7 +390,7 @@ def main():
         proj = trlib.path("glossary", "project.tsv")
         with open(proj, "a", encoding="utf-8") as fh:
             for conflict, _s, n, term, r1, c1, r2, c2 in findings:
-                fh.write(f"{term}\t{r1}\tfrom tr-terms, unreviewed"
+                fh.write(f"{term}\t{r1}\t{note}"
                          f"{' (was inconsistent)' if r2 else ''}\n")
         print(f"\n  appended {len(findings)} line(s) to {proj}")
         print("  Marked unreviewed. Read them before the next run, because")

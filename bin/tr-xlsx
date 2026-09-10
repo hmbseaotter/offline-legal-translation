@@ -141,6 +141,9 @@ def main():
         if v in mapping:
             cell.value = trlib.xml_safe(mapping[v])
 
+    if trlib.REF_HITS:
+        print(f"  {trlib.REF_HITS} value(s) taken from reference translations",
+              file=sys.stderr)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     wb.save(a.out)
     print(f"  -> {a.out}", file=sys.stderr)

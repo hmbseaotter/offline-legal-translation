@@ -20,7 +20,8 @@ P = trlib.PROJECTS
 MARK = os.path.join(P, ".active")
 KIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
-SUBDIRS = ["source", "translated", "work/ocr", "logs", "glossary", "prompts"]
+SUBDIRS = ["source", "translated", "work/ocr", "logs", "glossary", "prompts",
+           "reference"]
 
 def container_open():
     # Not isdir(): the mountpoint exists whether or not the container is

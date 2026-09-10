@@ -108,14 +108,20 @@ TOOLS = [
     ('`tools/gen-docs.py [--apply]`',
      'Writes the tables in CLAUDE.md and the manual from lib/registry.py. '
      'Run by the pre-commit hook, which refuses a commit where they have drifted'),
-    ('`tr-terms [--min-count N] [--top N] [--pin-all] [--write]`',
+    ('`tr-terms [--min-count N] [--top N] [--pin-all] [--write] [--reference]`',
      'Finds source terms the model rendered more than one way and proposes '
      'glossary entries. Runs no model. `--pin-all` proposes frequent terms too, '
      'since consistent-and-wrong is one find-and-replace while inconsistent is a '
-     'hunt through every variant. **Operator only**'),
+     'hunt through every variant. `--reference` harvests from the reference '
+     'translations `tr-ref` lined up instead of from the drafts. **Operator only**'),
     ('`tr-ocrstat [--min-pct N]`',
      'Unreadable-token rate per PDF, worst first, against the '
      '5%/20% thresholds. Answers "verify the OCR" for a whole corpus rather '
      'than one file. Legibility only \u2014 a misread digit in clean print '
      'scores high; use `ocr-check.py` for those. **Operator only**'),
+    ('`tr-ref [--rebuild] [--conflicts]`',
+     'Lines up reference translations from the project\'s `reference/<src>/` and '
+     '`reference/<tgt>/` sentence by sentence, without a model. `tr-run` then '
+     'takes the translator\'s rendering for any identical source sentence. Read '
+     '`work/reference/pairs.tsv` before translating. **Operator only**'),
 ]

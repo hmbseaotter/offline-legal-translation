@@ -4,6 +4,7 @@ Nothing here talks to the network except ollama_translate(), which speaks
 only to http://127.0.0.1:11434 (the local Ollama daemon).
 """
 import os, re, json, sqlite3, hashlib, urllib.request, sys, time, tempfile
+import collections
 
 # ------------------------------------------------------------ interpreter
 
@@ -852,6 +853,79 @@ def is_translatable(s):
             return False
     return True
 
+# ------------------------------------------- comparing numbers across a pair
+
+# Locale conversion is CORRECT output, not an error. Slovene writes dates
+# 5. 3. 2024 or 5. marec 2024, decimals with a comma, and time on a 24-hour
+# clock; English writes March 5, 2024, decimals with a point, and 2:30 p.m.
+# The translator requires those conversions, so the numerals legitimately
+# move around -- a month becomes a word, an hour shifts by twelve.
+#
+# Comparing raw digits therefore raised a tr-lint NUM finding for every date
+# in the corpus, burying the real ones. Both sides are canonicalised first so
+# the comparison is of values rather than spellings. It lives here rather
+# than in tr-lint because reference alignment needs the same answer to "do
+# these two sentences carry the same numbers", and two copies of that rule
+# would drift the way every other duplicated rule in this kit has.
+NUM_RE = re.compile(r"\d[\d.,:/–-]*\d|\d")
+MONTHS = {
+    1: ("january", "januar", "januarja", "jan"),
+    2: ("february", "februar", "februarja", "feb"),
+    3: ("march", "marec", "marca", "mar", "märz"),
+    4: ("april", "aprila", "apr"),
+    5: ("may", "maj", "maja", "mai"),
+    6: ("june", "junij", "junija", "jun", "juni"),
+    7: ("july", "julij", "julija", "jul", "juli"),
+    8: ("august", "avgust", "avgusta", "aug"),
+    9: ("september", "septembra", "sep", "sept"),
+    10: ("october", "oktober", "oktobra", "oct", "okt"),
+    11: ("november", "novembra", "nov"),
+    12: ("december", "decembra", "dec", "dezember"),
+}
+_MONTH_NAMES = "|".join(sorted((n for names in MONTHS.values() for n in names),
+                               key=len, reverse=True))
+# A month name counts only beside a number. "May" is also the commonest modal
+# verb in English legal drafting -- "the court may order" -- and read as the
+# fifth month it put a 5 into every such sentence, which tr-lint reported as
+# a number the translation had lost. A date always has a number beside its
+# month: "March 5", "5 March", "5th March", "5. marec", "20. Mai", "May 2024".
+_MONTH_RE = re.compile(
+    r"(?:(?<=\d )|(?<=\d\. )|(?<=\d\.)|(?<=\dst )|(?<=\dnd )|(?<=\drd )"
+    r"|(?<=\dth ))(" + _MONTH_NAMES + r")\b"
+    r"|\b(" + _MONTH_NAMES + r")(?=\.?,?\s+\d)", re.I)
+_MONTH_NUM = {n: str(num) for num, names in MONTHS.items() for n in names}
+
+# 2:30 p.m. / 2:30PM / 12:05 a.m.
+_AMPM_RE = re.compile(r"\b(\d{1,2}):(\d{2})\s*([ap])\.?\s*m\.?", re.I)
+
+
+def _to24(m):
+    h, mm, ap = int(m.group(1)), m.group(2), m.group(3).lower()
+    if ap == "a":
+        h = 0 if h == 12 else h
+    else:
+        h = 12 if h == 12 else h + 12
+    return f"{h:02d}:{mm}"
+
+
+def canon_locale(s):
+    """Fold locale spellings onto one form before numbers are compared."""
+    s = s or ""
+    s = _AMPM_RE.sub(_to24, s)                       # 2:30 p.m. -> 14:30
+    return _MONTH_RE.sub(                            # March 5 -> 3 5
+        lambda m: _MONTH_NUM[(m.group(1) or m.group(2)).lower()], s)
+
+
+def norm_nums(s):
+    """Numbers with separators normalized, so 1.234,56 == 1,234.56, and with
+    locale-converted dates and times folded onto a single representation."""
+    out = []
+    for m in NUM_RE.findall(canon_locale(s)):
+        d = re.sub(r"[^\d]", "", m)
+        if d:
+            out.append(d.lstrip("0") or "0")
+    return collections.Counter(out)
+
 # ---------------------------------------------------------------- glossary
 
 def load_glossary():
@@ -1201,11 +1275,41 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
     return tgt
 
 
+# ------------------------------------------------ reference translations
+
+_REFERENCES = None
+REF_HITS = 0
+
+
+def reference_translation(text, direction):
+    """The translator's own rendering of this exact sentence, or None.
+
+    From the project's reference/ folder, lined up by tr-ref; lib/trref.py
+    says what is kept and why. Checked before the memory and before the
+    model, and ahead of the glossary: a sentence a certifying translator has
+    already translated is not a draft. Nothing is reused where references
+    disagree, or where the translation was read by OCR.
+    """
+    global _REFERENCES, REF_HITS
+    if _REFERENCES is None:
+        _REFERENCES = {}
+        if ROOT and os.path.isdir(ROOT):
+            import trref
+            _REFERENCES = trref.load_reuse()
+    found = _REFERENCES.get(direction, {}).get(" ".join((text or "").split()))
+    if found is not None:
+        REF_HITS += 1
+    return found
+
+
 def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     if not is_translatable(text):
         # Not model work, but not necessarily unchanged either: a segment that
         # is only a date or an amount still gets its locale converted.
         return localize(text, src_lang, tgt_lang)
+    ref = reference_translation(text, f"{src_lang}-{tgt_lang}")
+    if ref is not None:
+        return ref
     gb = glossary_block(text, gloss or [])
     cached = tm_get(text, f"{src_lang}-{tgt_lang}", gb)
     if cached is not None:
@@ -1330,6 +1434,10 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
     for i, t in enumerate(texts):
         if not is_translatable(t):
             out[i] = localize(t, src_lang, tgt_lang)
+            continue
+        ref = reference_translation(t, direction)
+        if ref is not None:
+            out[i] = ref
             continue
         cached = tm_get(t, direction, glossary_block(t, gloss or []))
         if cached is not None:

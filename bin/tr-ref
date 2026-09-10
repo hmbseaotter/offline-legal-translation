@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""tr-ref - line up reference translations so their sentences are reused.
+
+OPERATOR ONLY, container open. Reads client documents and prints their names.
+
+Usage:  tr-ref [--rebuild] [--conflicts]
+
+  --rebuild    align every pair again, not only the ones that changed
+  --conflicts  print the source sentences the references translate
+               more than one way
+
+PUT THE FILES HERE, inside the project:
+
+    reference/<TR_SRC>/...     e.g. reference/en/leases/lease-2023.docx
+    reference/<TR_TGT>/...     e.g. reference/de/leases/lease-2023.pdf
+
+A pair is the same path on both sides, extension aside. Word, PDF with a text
+layer, scanned PDF and plain text are read; tr-pdf makes the text of a PDF,
+OCR'ing a scan in the language of its side.
+
+WHAT IT WRITES, inside the project:
+
+  work/reference.sqlite         the kept sentence pairs, which tr-run reuses
+  work/reference/pairs.tsv      the same, to read: document, source, target, how
+  work/reference/rejected.tsv   the pairs not kept, and why
+
+Read pairs.tsv before the first tr-run. Every line in it can go into a
+deliverable word for word, and an alignment tool that is right almost always
+is still wrong somewhere.
+
+WHAT HAPPENS NEXT
+
+  tr-run                a source sentence identical to a kept reference
+                        sentence takes that translation, with no model call --
+                        unless the references disagree about it, or its
+                        translation was read by OCR
+  tr-terms --reference  proposes glossary entries from the references rather
+                        than from the model's drafts
+
+Segments taken from a reference never enter the translation memory, so
+tr-lint does not check them: they are the translator's own work.
+"""
+import argparse
+import collections
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "lib"))
+import trlib  # noqa: E402
+import trref  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--rebuild", action="store_true",
+                    help="align every pair again, not only the ones that changed")
+    ap.add_argument("--conflicts", action="store_true",
+                    help="print the source sentences the references translate "
+                         "more than one way")
+    a = ap.parse_args()
+
+    src_lang = os.environ.get("TR_SRC", "sl")
+    tgt_lang = os.environ.get("TR_TGT", "en")
+    direction = f"{src_lang}-{tgt_lang}"
+    root = trlib.path("reference")
+    if not os.path.isdir(root):
+        print(f"  no reference translations in this project.\n\n"
+              f"  To use some, put each original under\n"
+              f"      {os.path.join(root, src_lang)}/\n"
+              f"  and its translation at the same path under\n"
+              f"      {os.path.join(root, tgt_lang)}/\n"
+              f"  then run tr-ref again.")
+        return 0
+
+    pairs, unpaired, ambiguous = trref.find_pairs(src_lang, tgt_lang)
+    db = trref.open_store()
+    known = {doc: sig for doc, sig in db.execute(
+        "SELECT doc, signature FROM docs WHERE direction = ?", (direction,))}
+
+    # A document removed from reference/ takes its sentences with it.
+    present = {doc for doc, _s, _t in pairs}
+    gone = [doc for doc in known if doc not in present]
+    for doc in gone:
+        db.execute("DELETE FROM pairs WHERE direction = ? AND doc = ?", (direction, doc))
+        db.execute("DELETE FROM docs WHERE direction = ? AND doc = ?", (direction, doc))
+    db.commit()
+
+    print(f"  {len(pairs)} reference pair(s), {direction}\n")
+    rejected_all = []
+    for doc, sp, tp in pairs:
+        sig = trref.signature(sp, tp)
+        if not a.rebuild and known.get(doc) == sig:
+            kept, why = db.execute(
+                "SELECT kept, rejected FROM docs WHERE direction = ? AND doc = ?",
+                (direction, doc)).fetchone()
+            print(f"  unchanged  kept {kept:>5}   {doc}")
+            continue
+        try:
+            sparas, show = trref.paragraphs(sp, src_lang)
+            tparas, thow = trref.paragraphs(tp, tgt_lang)
+        except Exception as e:
+            print(f"  FAILED     {doc}: {type(e).__name__}: {e}")
+            continue
+        paragraphs = show in ("docx", "txt") and thow in ("docx", "txt")
+        kept, rejected = trref.align_document(sparas, tparas,
+                                              by_paragraph=paragraphs)
+        how = show if show == thow else f"{show}/{thow}"
+        reusable = int("pdf-ocr" not in (show, thow))
+        db.execute("DELETE FROM pairs WHERE direction = ? AND doc = ?", (direction, doc))
+        db.executemany(
+            "INSERT INTO pairs VALUES (?,?,?,?,?,?,?)",
+            [(direction, doc, s, trref.norm(s), t, how, reusable) for s, t in kept])
+        reasons = collections.Counter(r for _s, _t, r in rejected)
+        summary = ", ".join(f"{r} {n}" for r, n in reasons.most_common())
+        db.execute("INSERT OR REPLACE INTO docs VALUES (?,?,?,?,?)",
+                   (direction, doc, sig, len(kept), summary))
+        db.commit()
+        rejected_all.extend((doc, s, t, r) for s, t, r in rejected)
+        note = "" if reusable else "   (OCR: terminology only)"
+        print(f"  aligned    kept {len(kept):>5}   rejected {len(rejected):>4}"
+              f"   {doc}  [{how}]{note}")
+        if summary:
+            print(f"             not kept: {summary}")
+
+    if unpaired:
+        print(f"\n  {len(unpaired)} file(s) with no counterpart on the other side:")
+        for p in unpaired:
+            print(f"      {os.path.relpath(p, root)}")
+    if ambiguous:
+        print(f"\n  {len(ambiguous)} name(s) with two files on one side, skipped:")
+        for stem in ambiguous:
+            print(f"      {stem}")
+
+    rows = db.execute(
+        "SELECT doc, src, tgt, how, reusable FROM pairs WHERE direction = ? "
+        "ORDER BY doc, rowid", (direction,)).fetchall()
+    outdir = trlib.path("work", "reference")
+    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, "pairs.tsv"), "w", encoding="utf-8") as fh:
+        fh.write("document\tsource\ttarget\thow\treused\n")
+        for doc, s, t, how, reusable in rows:
+            fh.write("\t".join(x.replace("\t", " ") for x in
+                               (doc, s, t, how, "yes" if reusable else "no")) + "\n")
+    if rejected_all or a.rebuild:
+        with open(os.path.join(outdir, "rejected.tsv"), "w", encoding="utf-8") as fh:
+            fh.write("document\tsource\ttarget\treason\n")
+            for doc, s, t, r in rejected_all:
+                fh.write("\t".join(x.replace("\t", " ") for x in (doc, s, t, r)) + "\n")
+
+    clashes = trref.conflicts(db, direction)
+    reuse = trref.load_reuse().get(direction, {})
+    db.close()
+    print(f"\n  {len(rows)} sentence pair(s) kept; {len(reuse)} distinct source "
+          f"sentence(s) will be reused by tr-run")
+    if clashes:
+        print(f"  {len(clashes)} source sentence(s) translated differently by "
+              f"different references - not reused")
+        if a.conflicts:
+            for s, ts in clashes:
+                print(f"\n    {s}")
+                for t in ts:
+                    print(f"      -> {t}")
+        else:
+            print("  see them:  tr-ref --conflicts")
+    print(f"\n  read before tr-run:  {os.path.join(outdir, 'pairs.tsv')}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

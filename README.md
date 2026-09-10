@@ -38,6 +38,7 @@ tr-inventory          classify every file by source language
 tr-inventory --count  OCR the scans, count source words, size the job
 tr-ocrstat            per-file unreadable rate, against measured thresholds
 ocr-check.py          read a page with two engines, compare the numbers
+tr-ref                line up earlier translations; reuse their sentences
 tr-run                translate what triage matched; resumable
 tr-lint               deterministic checks; the reviewer's worklist
 tr-terms              terms the model rendered two ways; glossary candidates
@@ -92,6 +93,15 @@ structurally worst at noticing: a number present in the source and absent
 from the target, a non-translatable altered, an agreed term not used, a
 segment handed back untranslated. Seconds, no inference, and it produces a
 worklist rather than a pass/fail.
+
+**Earlier translations, reused without a model.** A matter often comes with
+earlier translations of the same kinds of document. `tr-ref` lines each pair
+up sentence by sentence — by length, with the numbers both sides share as
+anchors — and keeps only one-to-one pairs whose numbers agree. An identical
+source sentence then takes the translator's rendering instead of a draft.
+Two things are never reused verbatim: a sentence the references translate
+differently, and a translation read by OCR, whose misreadings would pass
+straight into a deliverable.
 
 **Documentation generated from the source.** The environment table, the
 command reference and the tools list are written from `lib/registry.py` and
