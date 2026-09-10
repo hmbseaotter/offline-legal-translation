@@ -174,9 +174,22 @@ def from_pdf(path, allow_ocr=True, limit=SAMPLE_WORDS, full_ocr=False):
     for, in which case it runs the real pass and caches it for tr-pdf.
     """
     cached = _ocr_cache(path) if limit is None else None
+    # A layer written without confidence marking still counts words
+    # correctly, so plain --count may use it. --with-ocr is the request to
+    # produce the real layer, and that one goes back through tr-pdf.
+    if cached and full_ocr and trlib.ocr_layer_unmarked(cached):
+        cached = None
     if cached:
         with open(cached, encoding="utf-8", errors="replace") as fh:
             return _cap(fh.read().split(), limit), "pdf-ocr-cached"
+    # With --with-ocr every PDF gets the text layer tr-pdf will translate,
+    # made by tr-pdf. It decides born-digital against scan, and a PDF
+    # carrying somebody else's OCR layer is a scan to it -- whereas the
+    # word test below calls that "has text" and would never read it again,
+    # leaving tr-ocrstat asking for a pass this command then does not do.
+    # A born-digital file costs a pdftotext there, not an OCR.
+    if limit is None and full_ocr:
+        return _full_ocr(path, limit)
 
     args = ["pdftotext", "-layout", path, "-"]
     if limit is not None:
@@ -189,10 +202,8 @@ def from_pdf(path, allow_ocr=True, limit=SAMPLE_WORDS, full_ocr=False):
     if len(words) >= trlang.MIN_TOKENS:
         return _cap(words, limit), "pdf-text"
 
-    if limit is None and not full_ocr:
+    if limit is None:
         return "", f"pdf-needs-ocr ({_pdf_pages(path)} pages)"
-    if limit is None and full_ocr:
-        return _full_ocr(path, limit)
     if not allow_ocr:
         return "", "pdf-needs-ocr"
     if not (shutil.which("pdftoppm") and shutil.which("tesseract")):
@@ -221,28 +232,30 @@ def from_pdf(path, allow_ocr=True, limit=SAMPLE_WORDS, full_ocr=False):
 
 
 def _full_ocr(path, limit):
-    """Real OCR pass, cached where tr-pdf will find it."""
-    root = trlib.ROOT
-    if not root or not shutil.which("ocrmypdf"):
-        return "", "pdf-needs-ocr (ocrmypdf missing)"
-    ocrdir = os.path.join(root, "work", "ocr")
-    os.makedirs(ocrdir, exist_ok=True)
-    key = _ocr_key(path) or os.path.splitext(os.path.basename(path))[0]
-    out_pdf = os.path.join(ocrdir, key + ".ocr.pdf")
-    out_txt = os.path.join(ocrdir, key + ".txt")
-    langs = os.environ.get("TR_OCR_LANGS", "slv+eng")
+    """Real OCR pass, done by tr-pdf so there is one way to make a text layer.
+
+    This used to run ocrmypdf and pdftotext itself. It was written an hour
+    and a half before tr-ocrtext existed and never moved onto it, so the
+    documented path -- --count --with-ocr, then tr-run -- produced text
+    layers with nothing marked OCR_ILLEGIBLE, and tr-pdf reused them as a
+    cache hit. A second implementation of "OCR this PDF" is exactly how the
+    two came to differ; calling tr-pdf means they cannot.
+    """
+    if not trlib.ROOT:
+        return "", "pdf-needs-ocr (no project)"
+    tr_pdf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tr-pdf")
     try:
-        if not os.path.exists(out_pdf):
-            subprocess.run(["ocrmypdf", "-l", langs, "--rotate-pages",
-                            "--deskew", "--clean", "--output-type", "pdfa",
-                            "--quiet", path, out_pdf],
-                           capture_output=True, timeout=3600, check=True)
-        subprocess.run(["pdftotext", "-layout", out_pdf, out_txt],
-                       capture_output=True, timeout=300, check=True)
-        with open(out_txt, encoding="utf-8", errors="replace") as fh:
-            return _cap(fh.read().split(), limit), "pdf-ocr-full"
+        # Scans of a few hundred pages take a long time; a hang still has to
+        # end somewhere rather than stall the inventory forever.
+        r = subprocess.run([tr_pdf, "--ocr-only", path],
+                           capture_output=True, timeout=6 * 3600)
     except Exception as e:
         return "", f"pdf-ocr-failed: {type(e).__name__}"
+    cached = _ocr_cache(path)
+    if r.returncode != 0 or not cached:
+        return "", f"pdf-ocr-failed: tr-pdf exit {r.returncode}"
+    with open(cached, encoding="utf-8", errors="replace") as fh:
+        return _cap(fh.read().split(), limit), "pdf-ocr-full"
 
 
 def extract(path, ext, allow_ocr, limit=SAMPLE_WORDS, full_ocr=False):

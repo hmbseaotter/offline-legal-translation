@@ -314,6 +314,31 @@ def case_tmpdir(prefix):
     os.makedirs(base, exist_ok=True)
     return tempfile.mkdtemp(prefix=prefix, dir=base)
 
+
+def ocr_layer_unmarked(txt):
+    """Was this cached text layer written without confidence marking?
+
+    tr-inventory --count --with-ocr used to write work/ocr/<name>.txt itself,
+    with pdftotext over ocrmypdf's output. It predated tr-ocrtext by an hour
+    and a half and was never moved onto it. tr-pdf finds a cached text layer
+    and uses it rather than OCR the file again -- which is the point of the
+    cache -- so on the documented path the step that marks unreadable words
+    OCR_ILLEGIBLE never ran, and tr-ocrstat, counting marks that were never
+    written, reported every file as legible.
+
+    The tell is the form feed. pdftotext writes one after every page, even a
+    one-page document, unless given -nopgbrk. tr-ocrtext joins pages with a
+    blank line and never writes one, and tr-pdf's born-digital branch passes
+    -nopgbrk. So a form feed means the layer came from somewhere that did not
+    keep Tesseract's confidence, including tr-ocrtext's own fallback when
+    tesseract is missing -- which marks nothing either.
+    """
+    try:
+        with open(txt, encoding="utf-8", errors="replace") as fh:
+            return "\f" in fh.read()
+    except OSError:
+        return False
+
 # ---------------------------------------------------------------- segmentation
 
 # Abbreviations whose trailing period must NOT end a sentence.

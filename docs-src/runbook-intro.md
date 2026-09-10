@@ -84,8 +84,9 @@ have curated.
     tr-inventory --count --with-ocr
 
 This is the volume baseline the quote rests on. It reads every file in full
-rather than sampling, OCRs the scans, and caches the text where `tr-pdf`
-will find it, so the cost is paid once. It writes:
+rather than sampling, and has `tr-pdf` make the text layer of every PDF —
+the same layer, made the same way, that translation will use — so the OCR
+cost is paid once. It writes:
 
 | File | What it is | Safe to send? |
 |---|---|---|
@@ -117,7 +118,17 @@ least the confidence of each word is recorded.
 
 Worst file first, with a verdict against measured thresholds: under 5% of
 tokens unreadable proceed, 5–20% look at the marked pages first, 20% or more
-stop and get better copies. Exits non-zero if anything is in the stop band.
+stop and get better copies. Exits non-zero if anything is in the stop band,
+or if any text layer cannot be measured.
+
+**A text layer made by an earlier `tr-inventory --with-ocr` cannot be
+measured.** That version wrote the text with plain `pdftotext`, so nothing
+in it is marked `OCR_ILLEGIBLE` — and `tr-pdf` reused it, so neither did the
+translation. `tr-ocrstat` names those files instead of reporting them at 0%,
+and step 4 reads them again, keeping the old copy as `<name>.txt.unmarked`.
+A project already translated from such layers was translated without
+unreadable words marked; re-running step 4 and then `tr-run` there
+retranslates the affected PDFs.
 
 **6. Read what it flags.** For every file in the `look` or `STOP` band, open
 its text layer against the page images:

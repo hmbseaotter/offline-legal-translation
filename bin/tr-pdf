@@ -45,6 +45,24 @@ base="${rel//\//__}"
 pdf="$OCRDIR/$base.ocr.pdf"
 txt="$OCRDIR/$base.txt"
 
+# A cached layer made without confidence marking is not a cache hit.
+#
+# tr-inventory --count --with-ocr once wrote these with plain pdftotext, so a
+# drop OCR'd the documented way reached translation with nothing marked
+# OCR_ILLEGIBLE. Reusing that layer is what kept the defect invisible. It is
+# set aside rather than deleted -- renamed, in case anyone corrected it by
+# hand -- and the file is read again properly. The ocrmypdf output is kept,
+# so this costs the Tesseract pass, not the whole OCR.
+if [[ -f "$txt" ]] && python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import trlib
+sys.exit(0 if trlib.ocr_layer_unmarked(sys.argv[2]) else 1)' "$BIN/../lib" "$txt"; then
+  mv -f "$txt" "$txt.unmarked"
+  echo "  text layer was made without confidence marking; reading it again"
+  echo "    (previous copy kept as $(basename "$txt").unmarked)"
+fi
+
 # Is this a scan at all?
 #
 # Not every PDF in a bundle is. A born-digital document -- one exported from
