@@ -9,6 +9,7 @@ reviewer, not a pass/fail gate.
 
 Checks:
   NUM   a number present in source is absent from target, or vice versa
+  LONG  the target is far longer than the source: text the model added
   GLOSS a glossary term's agreed translation was not used
   NONTR a string marked non-translatable was altered
   FAIL  a segment where translation errored out
@@ -92,6 +93,11 @@ def main():
             findings.append(("NUM", "missing from target: " + ", ".join(sorted(lost)), src, tgt))
         if added:
             findings.append(("NUM", "not in source: " + ", ".join(sorted(added)), src, tgt))
+        # The same test tr-run now applies before caching. Here it finds the
+        # inventions already in a memory written before that test existed.
+        if trlib.implausible(src, tgt):
+            findings.append(("LONG", "far longer than the source - text added",
+                             src, tgt))
 
         low_s = src.lower()
         for term, want in gloss:
@@ -130,7 +136,7 @@ def main():
                              src, " || ".join(sorted(tgts))))
 
     counts = collections.Counter(f[0] for f in findings)
-    order = ["FAIL", "NUM", "NONTR", "INCON", "GLOSS", "ECHO", "EMPTY"]
+    order = ["FAIL", "NUM", "LONG", "NONTR", "INCON", "GLOSS", "ECHO", "EMPTY"]
     findings.sort(key=lambda f: (order.index(f[0]) if f[0] in order else 99, f[2]))
 
     os.makedirs(os.path.dirname(a.tsv), exist_ok=True)

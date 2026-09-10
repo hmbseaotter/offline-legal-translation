@@ -91,7 +91,8 @@ edited, not whether it is still correct.
 **Checks that run no model.** `tr-lint` catches what a language model is
 structurally worst at noticing: a number present in the source and absent
 from the target, a non-translatable altered, an agreed term not used, a
-segment handed back untranslated. Seconds, no inference, and it produces a
+segment handed back untranslated, a reply far longer than anything it was
+asked to translate. Seconds, no inference, and it produces a
 worklist rather than a pass/fail.
 
 **Earlier translations, reused without a model.** A matter often comes with

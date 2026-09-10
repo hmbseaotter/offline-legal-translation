@@ -1275,6 +1275,54 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
     return tgt
 
 
+# ------------------------------------------------ replies that are not translations
+
+# Asked to translate the bare heading STATEMENT, EuroLLM returned an invented
+# German declaration: a claimant, a vehicle, numbered clauses, blanks for a
+# date and a signature. It reads as a plausible document, and tr-lint noticed
+# only because the invention happened to contain numbers. A label or heading
+# is exactly where a model has least to go on and most room to write.
+#
+# A translation is not three times the length of its source, and a one-line
+# source does not translate into several lines. Both limits are generous on
+# purpose: this is a test for text that was added, not for wordy German.
+FIRM_PREFIX = ("Translate only the text below. Reply with its translation "
+               "and nothing else.\n\n")
+
+
+def implausible(src, tgt):
+    """Is this reply far longer than any translation of the source could be?"""
+    s, t = (src or "").strip(), (tgt or "").strip()
+    if "\n" in t and "\n" not in s:
+        return True
+    return len(t) > 3 * len(s) + 40
+
+
+def added_numbers(src, tgt):
+    """Numbers in the reply that the source does not have, dates and
+    separators folded first. The same comparison as tr-lint's NUM check.
+
+    Length does not catch every invention. "Case number" came back once as
+    "Klage Nr. 2 BvR 237/09" -- a fictitious court reference, short enough to
+    pass as a translation of a label. What gives it away is a number with no
+    counterpart in the source, and an invented identifier in a legal
+    document is the most expensive thing this pipeline can produce.
+
+    Such a reply earns one firmer retry, not a refusal: a model that writes
+    "dva tedna" as "2 weeks" has added a digit without adding anything false,
+    and turning that into a failed segment would cost the translator more
+    than tr-lint's NUM finding does.
+    """
+    return norm_nums(tgt) - norm_nums(src)
+
+
+def max_tokens(text):
+    """A generation cap no genuine translation reaches -- a token is rarely
+    shorter than a character -- which bounds what an invention costs. At
+    three tokens a second an unbounded one ran for minutes."""
+    return len(text) + 64
+
+
 # ------------------------------------------------ reference translations
 
 _REFERENCES = None
@@ -1314,24 +1362,43 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     cached = tm_get(text, f"{src_lang}-{tgt_lang}", gb)
     if cached is not None:
         return cached
-    payload = {
-        "model": require_model(src_lang, tgt_lang),
-        "system": build_prompt(src_lang, tgt_lang, gb),
-        "prompt": text,
-        "stream": False,
-        "options": {"temperature": 0.1, "top_p": 0.9, "num_ctx": NUM_CTX},
-    }
-    req = urllib.request.Request(
-        OLLAMA + "/api/generate",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"})
-    last = None
+    system = build_prompt(src_lang, tgt_lang, gb)
+    last, firm, fallback = None, False, None
     for attempt in range(retries):
+        payload = {
+            "model": require_model(src_lang, tgt_lang),
+            "system": system,
+            # After an implausible reply the identical request would most
+            # likely get the identical reply, so the retry says plainly that
+            # this text, and only this text, is to be translated.
+            "prompt": (FIRM_PREFIX + text) if firm else text,
+            "stream": False,
+            "options": {"temperature": 0.1, "top_p": 0.9, "num_ctx": NUM_CTX,
+                        "num_predict": max_tokens(text)},
+        }
+        req = urllib.request.Request(
+            OLLAMA + "/api/generate",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=1800) as r:
                 out = json.loads(r.read())["response"].strip()
             out = re.sub(r"^```.*?\n|```$", "", out, flags=re.S).strip()
+            if out and implausible(text, out):
+                last = "the reply was far longer than the source"
+                if firm:
+                    break
+                firm = True
+                continue
+            if out and not firm and added_numbers(text, out):
+                fallback, firm = out, True
+                continue
             if out:
+                # Of the first reply and the firmer one, the one inventing
+                # fewer numbers; tr-lint reports whatever is left as NUM.
+                if (fallback is not None and len(added_numbers(text, out))
+                        > len(added_numbers(text, fallback))):
+                    out = fallback
                 out = fix_numeric_format(text, out, src_lang, tgt_lang)
                 tm_put(text, out, f"{src_lang}-{tgt_lang}", gb)
                 return out
@@ -1339,6 +1406,10 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
         except Exception as e:
             last = e
             time.sleep(3 * (attempt + 1))
+    if fallback is not None:
+        out = fix_numeric_format(text, fallback, src_lang, tgt_lang)
+        tm_put(text, out, f"{src_lang}-{tgt_lang}", gb)
+        return out
     print(f"  ! translation failed after {retries} tries: {last}", file=sys.stderr)
     return f"[TRANSLATION FAILED] {text}"
 
@@ -1379,7 +1450,8 @@ def _translate_batch(texts, src_lang, tgt_lang, gloss):
                    "same numbers in the same order, one translation per line, "
                    "and nothing else.\n\n" + numbered),
         "stream": False,
-        "options": {"temperature": 0.1, "top_p": 0.9, "num_ctx": NUM_CTX},
+        "options": {"temperature": 0.1, "top_p": 0.9, "num_ctx": NUM_CTX,
+                    "num_predict": max_tokens(numbered) + 16 * len(texts)},
     }
     req = urllib.request.Request(
         OLLAMA + "/api/generate", data=json.dumps(payload).encode(),
@@ -1402,6 +1474,12 @@ def _translate_batch(texts, src_lang, tgt_lang, gloss):
     if set(got) != set(range(1, len(texts) + 1)):
         return None
     if any(not v for v in got.values()):
+        return None
+    # One invented line spoils the batch: send every item through the
+    # single-segment path, which retries it -- and refuses it outright if it
+    # is far longer than its source.
+    if any(implausible(t, got[i]) or added_numbers(t, got[i])
+           for i, t in enumerate(texts, 1)):
         return None
     return [got[i] for i in range(1, len(texts) + 1)]
 

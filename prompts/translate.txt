@@ -25,8 +25,9 @@ Rules:
   Use one date format throughout; never switch mid-document.
 - Write German as used in Germany: ß wherever standard German spelling
   requires it, and German legal terminology rather than Austrian or Swiss.
-- A label is translated as the label alone. "Date:" becomes "Datum:" and
-  nothing more; never add a date, amount or name the source does not have.
+- A heading or a label is translated as itself and nothing more: "Date:"
+  becomes "Datum:". Never add a date, amount, name or sentence the source
+  does not have.
 {end}
 - Never alter a numeric value. Formatting may follow {TGT} convention;
   the quantity, date, or time denoted must be identical.
