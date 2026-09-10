@@ -65,10 +65,10 @@ structure.** Filenames and the shape of the tree are reproduced in
 `translated/`, so the structure you create here is the structure you
 deliver. Do not flatten it.
 
-**Earlier translations, if the client has them.** Put each original under
-`reference/<TR_SRC>/` and its translation at the same path under
-`reference/<TR_TGT>/` — `reference/en/leases/lease-2023.docx` beside
-`reference/de/leases/lease-2023.pdf` — then:
+**Earlier translations, if the client has them.** Put both files of each
+pair in the same folder anywhere under `reference/`, named alike apart from
+a language suffix — `lease-2023_English.docx` beside
+`lease-2023_German.pdf` — then:
 
     tr-ref
 
@@ -79,6 +79,12 @@ in it can reach a deliverable word for word. Two kinds are never reused — a
 sentence the references translate differently (`tr-ref --conflicts` lists
 them), and a translation read by OCR, which counts for terminology only.
 References stay in this project; nothing reads another project's.
+
+The suffix may be `_English`, `_German`, `_Slovene` or `_EN`, `_DE`, `_SL`,
+in any case, and the two files may be different formats. It names a
+language, not which side was the original, so the same pair serves
+English→German and German→English work. A file with no suffix is listed
+and skipped, never guessed.
 
 **3. Classify every file by source language.**
 

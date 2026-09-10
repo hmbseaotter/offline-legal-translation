@@ -9,14 +9,16 @@ Usage:  tr-ref [--rebuild] [--conflicts]
   --conflicts  print the source sentences the references translate
                more than one way
 
-PUT THE FILES HERE, inside the project:
+PUT THE FILES HERE, inside the project, anywhere under reference/:
 
-    reference/<TR_SRC>/...     e.g. reference/en/leases/lease-2023.docx
-    reference/<TR_TGT>/...     e.g. reference/de/leases/lease-2023.pdf
+    reference/leases/lease-2023_English.docx
+    reference/leases/lease-2023_German.pdf
 
-A pair is the same path on both sides, extension aside. Word, PDF with a text
-layer, scanned PDF and plain text are read; tr-pdf makes the text of a PDF,
-OCR'ing a scan in the language of its side.
+Both files of a pair in the same folder, named alike apart from a language
+suffix: _English, _German, _Slovene, or _EN, _DE, _SL, in any case. Either
+side may be Word, PDF with a text layer, scanned PDF or plain text; tr-pdf
+makes the text of a PDF, OCR'ing a scan in the language of its file. The
+suffix names a language, not a role, so a pair serves both directions.
 
 WHAT IT WRITES, inside the project:
 
@@ -63,17 +65,21 @@ def main():
     src_lang = os.environ.get("TR_SRC", "sl")
     tgt_lang = os.environ.get("TR_TGT", "en")
     direction = f"{src_lang}-{tgt_lang}"
+    if src_lang == tgt_lang:
+        sys.exit(f"TR_SRC and TR_TGT are both {src_lang} - set the pair in "
+                 f"project.conf first")
     root = trlib.path("reference")
     if not os.path.isdir(root):
         print(f"  no reference translations in this project.\n\n"
-              f"  To use some, put each original under\n"
-              f"      {os.path.join(root, src_lang)}/\n"
-              f"  and its translation at the same path under\n"
-              f"      {os.path.join(root, tgt_lang)}/\n"
+              f"  To use some, put each pair in the same folder under\n"
+              f"      {root}/\n"
+              f"  named alike apart from a language suffix:\n"
+              f"      lease-2023_English.docx   lease-2023_German.pdf\n"
               f"  then run tr-ref again.")
         return 0
 
-    pairs, unpaired, ambiguous = trref.find_pairs(src_lang, tgt_lang)
+    pairs, unpaired, ambiguous, unlabelled, other = \
+        trref.find_pairs(src_lang, tgt_lang)
     db = trref.open_store()
     known = {doc: sig for doc, sig in db.execute(
         "SELECT doc, signature FROM docs WHERE direction = ?", (direction,))}
@@ -128,9 +134,20 @@ def main():
         for p in unpaired:
             print(f"      {os.path.relpath(p, root)}")
     if ambiguous:
-        print(f"\n  {len(ambiguous)} name(s) with two files on one side, skipped:")
+        print(f"\n  {len(ambiguous)} name(s) with two files in one language, "
+              f"skipped:")
         for stem in ambiguous:
             print(f"      {stem}")
+    if unlabelled:
+        print(f"\n  {len(unlabelled)} file(s) with no language suffix, skipped "
+              f"- name them ..._English, ..._German:")
+        for p in unlabelled:
+            print(f"      {os.path.relpath(p, root)}")
+    if other:
+        print(f"\n  {len(other)} file(s) in a language outside {direction}, "
+              f"not used:")
+        for p in other:
+            print(f"      {os.path.relpath(p, root)}")
 
     rows = db.execute(
         "SELECT doc, src, tgt, how, reusable FROM pairs WHERE direction = ? "

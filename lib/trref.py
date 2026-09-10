@@ -7,12 +7,19 @@ draft the model can produce, and it costs no inference.
 
 WHERE THEY GO -- inside the project, so inside the container:
 
-    reference/en/leases/lease-2023.docx
-    reference/de/leases/lease-2023.pdf
+    reference/leases/lease-2023_English.docx
+    reference/leases/lease-2023_German.pdf
 
-The two folders are named by the project's TR_SRC and TR_TGT. A pair is the
-same path on both sides, extension aside, so a Word original may be paired
-with a PDF translation.
+Anywhere under reference/, subfolders allowed. The two files of a pair sit in
+the same folder and have the same name apart from a language suffix, the last
+underscore-separated part before the extension: _English, _German, _Slovene,
+or _EN, _DE, _SL, in any case. The extensions may differ, so a Word original
+pairs with a PDF translation.
+
+The suffix names a language, not a role. Which side is the source is the
+project's TR_SRC, so the same pair serves an English->German matter and a
+German->English one. A file with no suffix is listed and skipped: guessing its
+language would put it on the wrong side of a pair without a word.
 
 WHY ONLY THE PROJECT'S OWN FOLDER
 
@@ -79,35 +86,59 @@ def norm(s):
 
 # ------------------------------------------------------------------ pairing
 
-def find_pairs(src_lang, tgt_lang):
-    """(pairs, unpaired, ambiguous) under the project's reference/ folder.
+# The language suffix: the last underscore-separated part of a file's name.
+SUFFIX_LANG = {
+    "english": "en", "en": "en",
+    "german": "de", "deutsch": "de", "de": "de",
+    "slovene": "sl", "slovenian": "sl", "sl": "sl",
+}
+_SUFFIX_RE = re.compile(r"^(?P<stem>.+)_(?P<lang>[A-Za-z]+)$")
 
-    pairs      [(doc, src_path, tgt_path)], doc being the shared stem
-    unpaired   [path] present on one side only
-    ambiguous  [stem] with more than one file on a side (a.docx and a.pdf)
+
+def file_language(name):
+    """(stem, language) for 'lease-2023_German.pdf', or (None, None)."""
+    m = _SUFFIX_RE.match(os.path.splitext(name)[0])
+    lang = SUFFIX_LANG.get(m.group("lang").lower()) if m else None
+    return (m.group("stem"), lang) if lang else (None, None)
+
+
+def find_pairs(src_lang, tgt_lang):
+    """What is under the project's reference/ folder, sorted into pairs.
+
+    pairs       [(doc, src_path, tgt_path)], doc being folder/name, suffix off
+    unpaired    [path] with a language suffix but no counterpart
+    ambiguous   [doc] with two files in one language (a_German.docx, a_German.pdf)
+    unlabelled  [path] with no language suffix
+    other       [path] in a language outside this project's pair
     """
     root = trlib.path("reference")
-    sides = {}
-    ambiguous = set()
-    for lang in (src_lang, tgt_lang):
-        base = os.path.join(root, lang)
-        found = {}
-        for dp, _dirs, files in os.walk(base):
-            for f in sorted(files):
-                if f.startswith((".", "~$")) or not f.lower().endswith(EXTS):
-                    continue
-                full = os.path.join(dp, f)
-                stem = os.path.splitext(os.path.relpath(full, base))[0]
-                if stem in found:
-                    ambiguous.add(stem)
-                found[stem] = full
-        sides[lang] = found
+    sides = {src_lang: {}, tgt_lang: {}}
+    ambiguous, unlabelled, other = set(), [], []
+    for dp, _dirs, files in os.walk(root):
+        for f in sorted(files):
+            if f.startswith((".", "~$")) or not f.lower().endswith(EXTS):
+                continue
+            full = os.path.join(dp, f)
+            stem, lang = file_language(f)
+            if not lang:
+                unlabelled.append(full)
+                continue
+            if lang not in sides:
+                other.append(full)
+                continue
+            doc = os.path.normpath(os.path.join(os.path.relpath(dp, root), stem))
+            key = doc.casefold()           # Lease_English pairs with lease_German
+            if key in sides[lang]:
+                ambiguous.add(doc)
+            sides[lang][key] = (doc, full)
     s, t = sides[src_lang], sides[tgt_lang]
-    pairs = [(stem, s[stem], t[stem]) for stem in sorted(s)
-             if stem in t and stem not in ambiguous]
-    unpaired = sorted([s[k] for k in s if k not in t] +
-                      [t[k] for k in t if k not in s])
-    return pairs, unpaired, sorted(ambiguous)
+    amb = {d.casefold() for d in ambiguous}
+    pairs = [(s[k][0], s[k][1], t[k][1]) for k in sorted(s)
+             if k in t and k not in amb]
+    unpaired = sorted([s[k][1] for k in s if k not in t] +
+                      [t[k][1] for k in t if k not in s])
+    return (pairs, unpaired, sorted(ambiguous), sorted(unlabelled),
+            sorted(other))
 
 
 def signature(*paths):

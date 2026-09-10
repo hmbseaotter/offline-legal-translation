@@ -120,8 +120,9 @@ TOOLS = [
      'than one file. Legibility only \u2014 a misread digit in clean print '
      'scores high; use `ocr-check.py` for those. **Operator only**'),
     ('`tr-ref [--rebuild] [--conflicts]`',
-     'Lines up reference translations from the project\'s `reference/<src>/` and '
-     '`reference/<tgt>/` sentence by sentence, without a model. `tr-run` then '
+     'Lines up reference translations in the project\'s `reference/` — each pair '
+     'in one folder, named alike apart from a language suffix (`_English`, '
+     '`_German`) — sentence by sentence, without a model. `tr-run` then '
      'takes the translator\'s rendering for any identical source sentence. Read '
      '`work/reference/pairs.tsv` before translating. **Operator only**'),
 ]
