@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # tr-model - register the translation model under a stable short name.
 #
+# Usage:  tr-model [hf-tag] [name]
+#
+#   tr-model        GaMS3 as gams3:q8, the model for Slovene<->English
+#   tr-model hf.co/mradermacher/EuroLLM-9B-Instruct-2512-GGUF:Q8_0 eurollm9b-2512:q8
+#                   EuroLLM, the model for English<->German
+#
 # Wrapping the long Hugging Face tag in a local alias means the pipeline
 # refers to "gams3:q8" everywhere. Changing model later is one command here
 # rather than an edit in every script.
@@ -32,9 +38,21 @@ rm -rf "$TMP"
 echo
 ollama show "$NAME" | head -20
 echo
-if [[ "$NAME" == "gams3:q8" ]]; then
-  echo "Nothing to set: gams3:q8 is the default every script already uses."
+# Which pairs already use this name comes from trlib's routing table, not a
+# list kept here. The advice for any other name used to be exporting
+# TR_MODEL from ~/.bashrc -- which, with the model chosen per pair, would
+# send every pair of every project to this one model.
+routed="$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import trlib
+print(" ".join(f"{s}->{t}" for (s, t), m in sorted(trlib.PAIR_MODELS.items())
+               if m == sys.argv[2]))' "$(dirname "$0")/../lib" "$NAME" 2>/dev/null || true)"
+if [[ -n "$routed" ]]; then
+  echo "Nothing to set: $NAME is already the model for $routed."
 else
-  echo "Registered under a non-default name, so tell the scripts about it:"
-  echo "  export TR_MODEL=$NAME          # add to ~/.bashrc to make it stick"
+  echo "No language pair is routed to $NAME. To use it for one project, add"
+  echo "  TR_MODEL=$NAME"
+  echo "to that project's project.conf. Not to ~/.bashrc: that would send"
+  echo "every pair of every project to this model."
 fi

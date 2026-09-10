@@ -245,24 +245,83 @@ def require_root():
 def project_name():
     return os.path.basename(ROOT.rstrip("/")) if ROOT else "(none)"
 
-MODEL = os.environ.get("TR_MODEL", "gams3:q8")
 OLLAMA = os.environ.get("TR_OLLAMA", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
-# v2: the prompt stopped ordering dates and amounts reproduced verbatim and
-# started requiring locale conversion.
-# v4: the date forms were wrong in both directions. English takes
-# "March 5, 2024", not "5 March 2024" -- that form was this kit's invention.
-# Slovene takes "5. marec 2024": the day carries a period because it is an
-# ordinal (bare "5" is the cardinal), the month name is lowercase, and the
-# three parts are spaced. "5. Marec 2024" is wrong twice.
-# v3: institution names are translated, not reproduced verbatim. The verbatim
-# rule had listed them alongside case numbers, and two models read it two
-# ways -- qwen3.6 left "Okrožnim sodiščem v Ljubljani" in Slovene, which the
-# rule as written permitted, while gams3 translated it. A court's name is
-# not an identifier, so the rule was wrong rather than ambiguous.
-# Invariant 7 -- the memory keys on this, so anything cached under an earlier
-# version was produced under a different instruction and must not be reused.
-PROMPT_VERSION = os.environ.get("TR_PROMPT_VERSION", "v6")
+
+# Which model translates which pair.
+#
+# GaMS3 is continually pretrained on Slovene, English, Bosnian, Serbian and
+# Croatian. German is absent from every stage, so the German it has is
+# residue of the base Gemma. It was the model for everything only because
+# sl<->en was the only pair. EuroLLM covers every EU official language and
+# has translation in its instruction tuning.
+#
+# Routed here rather than left to TR_MODEL, because forgetting fails
+# silently: a German project that did not set the variable would be drafted
+# by the Slovene model and look finished. TR_MODEL still wins, set in a
+# project's project.conf -- not in ~/.bashrc, where it would send every pair
+# of every project to one model.
+#
+# Slovene<->German has no entry. The model researched for it (EuroLLM-22B)
+# is not installed, and pivoting through English doubles the error, so
+# translating refuses until a model is chosen.
+PAIR_MODELS = {
+    ("sl", "en"): "gams3:q8",
+    ("en", "sl"): "gams3:q8",
+    ("en", "de"): "eurollm9b-2512:q8",
+    ("de", "en"): "eurollm9b-2512:q8",
+}
+
+
+def model_for(src_lang, tgt_lang):
+    """TR_MODEL when set; otherwise the model routed for the pair, or ""."""
+    return os.environ.get("TR_MODEL") or PAIR_MODELS.get((src_lang, tgt_lang), "")
+
+
+def require_model(src_lang, tgt_lang):
+    m = model_for(src_lang, tgt_lang)
+    if not m:
+        sys.exit(f"no model is chosen for {src_lang} -> {tgt_lang}.\n"
+                 f"Set TR_MODEL in this project's project.conf. Do not use "
+                 f"gams3:q8 for German: German is not in its training.")
+    return m
+
+
+# The model for this project's pair, for the tools that report on one.
+MODEL = model_for(os.environ.get("TR_SRC", "sl"), os.environ.get("TR_TGT", "en"))
+
+# Seconds per segment, end to end, by model. Measured on this machine, never
+# estimated from a tokens-per-second figure: that was optimistic by ~5x,
+# because most of a segment's cost was not generation.
+#
+#   gams3:q8           48.3  12 samples of real sl->en pipeline traffic.
+#                            Prefill 7.00 tok/s, generation 2.20 tok/s: every
+#                            call re-reads the system prompt, about 28 s, and
+#                            pays it whether the cell holds a sentence or two
+#                            words.
+#   eurollm9b-2512:q8  10.5  Median of 42 requests, 14 invented en->de
+#                            segments three times, with the German prompt,
+#                            Ollama 0.30.9. Prefill ~220 tok/s, generation
+#                            3.0 tok/s, no request failed. Here generation
+#                            is most of the cost, so batching saves less
+#                            than it did for GaMS3.
+#
+# One table, read by tr-inventory and tr-xlsx. It used to be a constant in
+# each with a note that both must move together.
+SEC_PER_SEGMENT = {
+    "gams3:q8": 48.3,
+    "eurollm9b-2512:q8": 10.5,
+}
+
+
+def sec_per_segment(model=None):
+    """(seconds, measured) for a model. Unmeasured falls back to the slowest
+    figure there is, and says so -- an estimate that errs long is a delay,
+    one that errs short is a mispriced job."""
+    m = MODEL if model is None else model
+    if m in SEC_PER_SEGMENT:
+        return SEC_PER_SEGMENT[m], True
+    return max(SEC_PER_SEGMENT.values()), False
 
 def path(*p):
     return os.path.join(require_root(), *p)
@@ -706,6 +765,49 @@ def _en_to_sl(s):
     return _en_number_to_sl(s)
 
 
+# Capitalised: German capitalises nouns, month names among them.
+_DE_MONTHS = ("Januar", "Februar", "März", "April", "Mai", "Juni", "Juli",
+              "August", "September", "Oktober", "November", "Dezember")
+
+
+def _en_to_de(s):
+    """English whole-segment values in the form used in Germany.
+
+    "5. März 2024": the day takes an ordinal period, as in Slovene, but the
+    month is capitalised and there is no need to guess a grammatical case.
+    Times go to the 24-hour clock, zero-padded like the Slovene form, and
+    without "Uhr": a cell holding only a time is a column value, and adding
+    a word to it is a choice for the translator rather than this converter.
+    Amounts group and decimate exactly as Slovene does, 12.450,00, so the
+    Slovene number conversion is the German one.
+    """
+    m = _DATE_EN.match(s)
+    if m:
+        if m.group(1):                       # "March 5, 2024"
+            name, d, y = m.group(1), int(m.group(2)), m.group(3)
+        else:                                # "5 March 2024"
+            d, name, y = int(m.group(4)), m.group(5), m.group(6)
+        mo = [n.lower() for n in _EN_MONTHS].index(name.lower())
+        if 1 <= d <= 31:
+            return f"{d}. {_DE_MONTHS[mo]} {y}"
+        return None
+
+    m = _TIME_AMPM.match(s)
+    if m:
+        h, mi, ap = int(m.group(1)), m.group(2), m.group(3).lower()
+        if 1 <= h <= 12 and 0 <= int(mi) <= 59:
+            h24 = (0 if h == 12 else h) if ap == "a" else (12 if h == 12 else h + 12)
+            return f"{h24:02d}:{mi}"
+        return None
+
+    m = _AMOUNT.match(s)
+    if m:
+        num = _en_number_to_sl(m.group(1))
+        return f"{num} {m.group(2)}" if num else None
+
+    return _en_number_to_sl(s)
+
+
 def localize(text, src_lang, tgt_lang):
     """Convert a whole-segment date, time or amount to the target locale.
 
@@ -714,10 +816,10 @@ def localize(text, src_lang, tgt_lang):
     Neither "5 March 2024" nor "5. Marec 2024" is correct in either language.
 
     Returns the text unchanged when nothing applies, and for every pair other
-    than sl<->en. German writes "5. März 2024" and keeps the 24-hour clock,
-    so it needs its own rules; the manual says to verify that pair before
-    extending to it, and applying English conventions to German silently
-    would be worse than doing nothing.
+    than sl<->en and en->de. German writes "5. März 2024" and keeps the
+    24-hour clock, so it has its own rules; other German pairs are left alone
+    until someone needs them, because applying another language's
+    conventions silently would be worse than doing nothing.
 
     Deliberately conservative in two places. "14:30" is read as a time,
     "14.30" never is -- in an isolated cell that is far more likely a decimal,
@@ -733,6 +835,8 @@ def localize(text, src_lang, tgt_lang):
         return _sl_to_en(s) or text
     if src_lang == "en" and tgt_lang == "sl":
         return _en_to_sl(s) or text
+    if src_lang == "en" and tgt_lang == "de":
+        return _en_to_de(s) or text
     return text
 
 
@@ -813,9 +917,14 @@ def _key(src, direction, gloss_sig=""):
     a banking term does not invalidate a corpus of criminal-procedure
     segments it never touches.
     """
+    # The model and prompt version routed for THIS direction, not the
+    # project's. A worker can be pointed at another pair with --from/--to,
+    # and its segments must not be filed under the project's model.
+    s, t = (direction.split("-") + ["", ""])[:2]
+    model, version = model_for(s, t), prompt_version(s, t)
     h = hashlib.sha256()
     if gloss_sig:
-        h.update(f"{direction}\x00{MODEL}\x00{PROMPT_VERSION}\x00{gloss_sig}"
+        h.update(f"{direction}\x00{model}\x00{version}\x00{gloss_sig}"
                  f"\x00{src}".encode())
     else:
         # No applicable glossary terms: hash exactly as this function did
@@ -829,7 +938,7 @@ def _key(src, direction, gloss_sig=""):
         # reported as missing, just gone, which is the worst way for a cache
         # to fail. Found because tr-terms said "no segments for prompt v5"
         # over a memory that held 532 of them.
-        h.update(f"{direction}\x00{MODEL}\x00{PROMPT_VERSION}\x00{src}".encode())
+        h.update(f"{direction}\x00{model}\x00{version}\x00{src}".encode())
     return h.hexdigest()
 
 def tm_current_key(src, direction, gloss):
@@ -852,15 +961,92 @@ def tm_get(src, direction, gloss_sig=""):
     return r[0] if r else None
 
 def tm_put(src, tgt, direction, gloss_sig=""):
+    s, t = (direction.split("-") + ["", ""])[:2]
     db = _db()
     db.execute("INSERT OR REPLACE INTO tm VALUES(?,?,?,?,?,?,?)",
-               (_key(src, direction, gloss_sig), src, tgt, direction, MODEL,
-                PROMPT_VERSION, time.time()))
+               (_key(src, direction, gloss_sig), src, tgt, direction,
+                model_for(s, t), prompt_version(s, t), time.time()))
     db.commit(); db.close()
 
 # ---------------------------------------------------------------- model
 
 LANG = {"sl": "Slovene", "en": "English", "de": "German"}
+
+# Rules that differ by language live in blocks inside the one prompt file:
+#
+#     {when TGT=de}
+#     - Convert dates ... 5. März 2024 ...
+#     {end}
+#
+# Conditions test SRC, TGT or PAIR against comma-separated values, several
+# on one line must all hold, and the marker lines themselves are never sent.
+# One file for every pair, rather than a file per pair, because the rules
+# that do not vary -- OCR_ILLEGIBLE, what is verbatim, the register -- would
+# otherwise be written out several times and drift, which is how the second
+# prompt copy this file replaced came to exist.
+#
+# It also keeps each call short. Prefill is most of a segment's cost, and a
+# Slovene->English call has no use for the German rules.
+_WHEN_RE = re.compile(r"^\{when\s+([^}]*)\}$")
+_END_RE = re.compile(r"^\{end\}$")
+
+
+def _select_blocks(text, src_lang, tgt_lang, where):
+    """The prompt text that applies to this pair, markers removed."""
+    facts = {"SRC": src_lang, "TGT": tgt_lang, "PAIR": f"{src_lang}-{tgt_lang}"}
+    out, keep, opened = [], True, 0
+    for n, line in enumerate(text.splitlines(keepends=True), 1):
+        m = _WHEN_RE.match(line.strip())
+        if m:
+            if opened:
+                sys.exit(f"{where}:{n}: {{when}} inside the block opened at "
+                         f"line {opened}; close it with {{end}} first")
+            opened, keep = n, True
+            for cond in m.group(1).split():
+                k, _, vals = cond.partition("=")
+                if k not in facts or not vals:
+                    sys.exit(f"{where}:{n}: cannot read {cond!r} - write "
+                             f"SRC=, TGT= or PAIR=, e.g. {{when TGT=de}}")
+                keep = keep and facts[k] in vals.split(",")
+            continue
+        if _END_RE.match(line.strip()):
+            if not opened:
+                sys.exit(f"{where}:{n}: {{end}} with no {{when}} before it")
+            opened, keep = 0, True
+            continue
+        if keep:
+            out.append(line)
+    if opened:
+        sys.exit(f"{where}:{opened}: {{when}} is never closed with {{end}}")
+    return "".join(out)
+
+
+_TEMPLATES = {}
+
+
+def _prompt_template(src_lang, tgt_lang):
+    """The prompt for a pair with {GLOSSARY} still in place, or None when the
+    kit's file is missing. Read once per pair per process, so the text sent
+    and the version derived from it cannot disagree mid-run."""
+    k = (src_lang, tgt_lang)
+    if k in _TEMPLATES:
+        return _TEMPLATES[k]
+    kit_prompt = os.path.join(KIT_DIR, "prompts", "translate.txt")
+    if not os.path.exists(kit_prompt):
+        return None
+    where, base = kit_prompt, open(kit_prompt, encoding="utf-8").read()
+    tpls = [shared("prompts", "translate.txt")]
+    if ROOT and os.path.isdir(ROOT):                 # see load_glossary()
+        tpls.append(path("prompts", "translate.txt"))   # project overrides shared
+    for tpl in tpls:
+        if os.path.exists(tpl):
+            where, base = tpl, open(tpl, encoding="utf-8").read()
+    t = _select_blocks(base, src_lang, tgt_lang, where) \
+        .replace("{SRC}", LANG.get(src_lang, src_lang)) \
+        .replace("{TGT}", LANG.get(tgt_lang, tgt_lang))
+    _TEMPLATES[k] = t
+    return t
+
 
 def build_prompt(src_lang, tgt_lang, gloss_block):
     """The kit's prompts/translate.txt, unless a project file overrides it.
@@ -882,27 +1068,68 @@ def build_prompt(src_lang, tgt_lang, gloss_block):
     <project>/prompts/translate.txt, or across matters at
     _shared/prompts/translate.txt -- which is the case that rule exists for.
     """
-    kit_prompt = os.path.join(KIT_DIR, "prompts", "translate.txt")
-    if not os.path.exists(kit_prompt):
+    t = _prompt_template(src_lang, tgt_lang)
+    if t is None:
+        kit_prompt = os.path.join(KIT_DIR, "prompts", "translate.txt")
         sys.exit(f"the kit's prompt is missing: {kit_prompt}\n"
                  f"It is the source of every translation instruction. Restore "
                  f"it from the repository rather than translating without it.")
-    base = open(kit_prompt, encoding="utf-8").read()
-    tpls = [shared("prompts", "translate.txt")]
-    if ROOT and os.path.isdir(ROOT):                 # see load_glossary()
-        tpls.append(path("prompts", "translate.txt"))   # project overrides shared
-    for tpl in tpls:
-        if os.path.exists(tpl):
-            base = open(tpl, encoding="utf-8").read()
-    return base.replace("{SRC}", LANG.get(src_lang, src_lang)) \
-               .replace("{TGT}", LANG.get(tgt_lang, tgt_lang)) \
-               .replace("{GLOSSARY}", gloss_block)
+    return t.replace("{GLOSSARY}", gloss_block)
+
+
+# THE PROMPT VERSION IS DERIVED FROM THE PROMPT
+#
+# The memory keys on it (invariant 7): anything cached under another version
+# was produced under a different instruction and must not be reused. It was
+# a string, TR_PROMPT_VERSION, bumped by hand on every edit -- v2 when dates
+# stopped being verbatim, v3 when institution names started being
+# translated, v4 when both date forms were corrected, v5 when the model was
+# told to pass OCR_ILLEGIBLE through rather than judge legibility, v6 for
+# short labels. Each bump invalidated every pair at once, and a forgotten one
+# reused stale translations with nothing to show it.
+#
+# Now it is a hash of the text a pair is actually sent. Editing the German
+# rules moves the version for German pairs and leaves Slovene->English
+# alone; a project's own prompt override gets a version of its own; and
+# forgetting to bump is no longer possible.
+#
+# The v6 text is kept by name. These are the hashes of the two pairs that
+# were ever translated under it, so every memory row and every
+# deliverables.tsv line written as "v6" still matches. TR_PROMPT_VERSION
+# remains as an explicit override.
+_LEGACY_PROMPT_VERSIONS = {
+    "6b2f2803b65c03bb7c921031b9e1ac5a71a553abc9679b0d2e05d32b52a954ed": "v6",  # sl-en
+    "0374c54664393bf75e67be73a393521f05f182d91df1fe9ab5ea79dabaeee37f": "v6",  # en-sl
+}
+_VERSIONS = {}
+
+
+def prompt_version(src_lang, tgt_lang):
+    explicit = os.environ.get("TR_PROMPT_VERSION")
+    if explicit:
+        return explicit
+    k = (src_lang, tgt_lang)
+    if k not in _VERSIONS:
+        t = _prompt_template(src_lang, tgt_lang)
+        if t is None:
+            _VERSIONS[k] = "missing"
+        else:
+            h = hashlib.sha256(t.encode()).hexdigest()
+            _VERSIONS[k] = _LEGACY_PROMPT_VERSIONS.get(h, "p-" + h[:12])
+    return _VERSIONS[k]
+
+
+# The version for this project's pair, for the tools that report on one.
+PROMPT_VERSION = prompt_version(os.environ.get("TR_SRC", "sl"),
+                                os.environ.get("TR_TGT", "en"))
 
 # A Slovene amount: optional period-grouped thousands, comma decimal, one or
 # two decimal digits. The lookarounds keep it from starting or ending inside a
 # longer run of digits and separators.
 _SL_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:\.\d{3})*|\d+),(\d{1,2})(?![\d,.])")
 _EN_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)\.(\d{1,2})(?![\d,.])")
+_COMMA_DECIMAL = {"sl", "de"}
+_POINT_DECIMAL = {"en"}
 
 
 def _regroup(digits, sep):
@@ -939,22 +1166,27 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
     Idempotent: a number the model already converted no longer matches the
     source-format pattern, so it is not touched twice.
 
-    KNOWN LIMIT, en->sl ONLY. English writes both "1.50" as an amount and
-    "5.10" as a section reference, and nothing in the string distinguishes
-    them, so an en->sl run turns "Section 5.10" into "Section 5,10". The
-    sl->en direction has no such ambiguity, because a Slovene amount needs a
-    comma decimal and a section reference never has one. Nothing here is
-    wrong for the pair in use; verify it before the reverse pair is, which
-    is the same caveat the manual already carries for German.
+    GERMAN writes amounts exactly as Slovene does, 12.450,00, so what decides
+    a conversion is which side writes a decimal comma, not which language
+    it is. sl<->de therefore converts nothing.
+
+    KNOWN LIMIT, FROM ENGLISH ONLY. English writes both "1.50" as an amount
+    and "5.10" as a section reference, and nothing in the string
+    distinguishes them, so an en->sl or en->de run turns "Section 5.10" into
+    "Section 5,10". The comma-to-point directions have no such ambiguity,
+    because a Slovene or German amount needs a comma decimal and a section
+    reference never has one.
     """
-    if not src or not tgt or {src_lang, tgt_lang} != {"sl", "en"}:
+    if not src or not tgt:
         return tgt
-    if src_lang == "sl":
+    if src_lang in _COMMA_DECIMAL and tgt_lang in _POINT_DECIMAL:
         pat, thou_out, dec_out = _SL_AMOUNT, ",", "."
         strip = "."
-    else:
+    elif src_lang in _POINT_DECIMAL and tgt_lang in _COMMA_DECIMAL:
         pat, thou_out, dec_out = _EN_AMOUNT, ".", ","
         strip = ","
+    else:
+        return tgt
 
     subs = {}
     for m in pat.finditer(src):
@@ -979,7 +1211,7 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     if cached is not None:
         return cached
     payload = {
-        "model": MODEL,
+        "model": require_model(src_lang, tgt_lang),
         "system": build_prompt(src_lang, tgt_lang, gb),
         "prompt": text,
         "stream": False,
@@ -1034,7 +1266,7 @@ def _translate_batch(texts, src_lang, tgt_lang, gloss):
     gb = glossary_block("\n".join(texts), gloss or [])
     numbered = "\n".join(f"{i}. {t}" for i, t in enumerate(texts, 1))
     payload = {
-        "model": MODEL,
+        "model": require_model(src_lang, tgt_lang),
         # Same system prompt as the single-segment path, so both share one
         # cache namespace and one set of rules. The batch framing goes in the
         # user turn.

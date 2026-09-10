@@ -71,6 +71,8 @@ CLAUDE.md     read by Claude Code at session start — states the data boundary
 ```bash
 tr-hwsurvey                 # confirm the machine still matches the manual
 tr-model                    # pull and register gams3:q8 (~13 GB, once)
+# only for English<->German matters (~10 GB, once):
+tr-model hf.co/mradermacher/EuroLLM-9B-Instruct-2512-GGUF:Q8_0 eurollm9b-2512:q8
 ./bin/case-init 40G         # create the encrypted container
 mkdir -p ~/.local/sbin        # the guard shadows, never replaces, the launcher
 cp bin/case-guard ~/.local/sbin/claude && chmod +x ~/.local/sbin/claude

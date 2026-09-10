@@ -17,7 +17,8 @@ generated from the tools themselves so it cannot fall out of step with them.
 | | |
 |---|---|
 | `tr-setup` | Packages, Python environment, dictionaries, git hooks. Idempotent. |
-| `tr-model` | Registers the translation model with Ollama as `gams3:q8`. |
+| `tr-model` | Registers the Slovene↔English model with Ollama as `gams3:q8`. |
+| `tr-model hf.co/mradermacher/EuroLLM-9B-Instruct-2512-GGUF:Q8_0 eurollm9b-2512:q8` | Only for English↔German matters: registers the model for that pair. About 10 GB. |
 | `case-init 40G` | Creates the encrypted container. Once, ever. Put the passphrase in your password manager and copy `~/.case/header.bak` onto a USB stick — a corrupted LUKS header loses the data even with the right passphrase. |
 | `tools/install-desktop-guard.sh` | Routes the desktop launcher through the guard. The PATH wrapper only covers the terminal. |
 
@@ -44,6 +45,20 @@ the mount and assuming the rest.
 
     case-open
     tr-project --new kranj-2024
+
+**For any pair other than Slovene→English, set it now.** `tr-project --new`
+writes Slovene→English into the project's `project.conf`. For an
+English→German matter, edit that file so these three lines read:
+
+    TR_SRC=en
+    TR_TGT=de
+    TR_OCR_LANGS=eng
+
+Nothing else is set. The model follows the pair — GaMS3 for
+Slovene↔English, EuroLLM for English↔German — and `tr-run` refuses to start
+when that model is not installed, instead of writing a failed translation
+for every segment. Set the pair before step 3: triage keeps only the files
+in `TR_SRC`, and counts only those toward the volume.
 
 **2. Copy the client's drop into `source/`, preserving its folder
 structure.** Filenames and the shape of the tree are reproduced in
@@ -212,7 +227,7 @@ decides what you can afford to do when:
 | Change | What re-runs |
 |---|---|
 | A glossary term | Only the segments containing that term |
-| `TR_PROMPT_VERSION` | **Everything** |
+| The prompt text | **Everything** translated for the pairs whose prompt changed |
 
 So a prompt change belongs before a full run, not after. On a twenty-hour
 corpus that is the difference between minutes and starting again.

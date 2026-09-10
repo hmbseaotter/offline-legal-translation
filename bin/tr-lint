@@ -113,10 +113,11 @@ def main():
         # would let both the old and the new rendering through and report the
         # segment as INCON -- the same false alarm prompt bumps used to cause.
         # Keep only what tr-run would actually reuse today.
+        # No filter on model or version in SQL: both are chosen per
+        # direction, and the key carries the ones routed for its direction.
         raw = db.execute(
-            "SELECT key, src, tgt, direction, model, prompt_version FROM tm "
-            "WHERE model = ? AND prompt_version = ?",
-            (trlib.MODEL, trlib.PROMPT_VERSION)).fetchall()
+            "SELECT key, src, tgt, direction, model, prompt_version FROM tm"
+            ).fetchall()
         rows = [(src, tgt, direction, model, pver)
                 for key, src, tgt, direction, model, pver in raw
                 if key == trlib.tm_current_key(src, direction, gloss)]

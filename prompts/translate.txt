@@ -5,6 +5,7 @@ Rules:
 - Preserve meaning exactly. Do not summarize, expand, or improve the source.
 - Reproduce verbatim, untranslated: case numbers, file numbers, statutory
   citations, article and paragraph references, personal names, and addresses.
+{when TGT=en,sl}
 - Translate institution names into {TGT} (Okrožno sodišče v Ljubljani ->
   District Court in Ljubljana). They are not identifiers.
 - Convert dates, amounts and times to {TGT} convention without changing the
@@ -14,6 +15,19 @@ Rules:
   ordinal, the month name is lowercase, all three parts spaced; decimal
   comma and thousands point (12.450,00); 24-hour clock, never a.m./p.m.
   Use one date format throughout; never switch mid-document.
+{end}
+{when TGT=de}
+- Translate institution names into {TGT}. They are not identifiers.
+- Convert dates, amounts and times to {TGT} convention without changing
+  the value: 5. März 2024 — the day takes a period because it is an
+  ordinal, the month name is capitalised; decimal comma and thousands
+  point (12.450,00); 24-hour clock, never a.m./p.m.
+  Use one date format throughout; never switch mid-document.
+- Write German as used in Germany: ß wherever standard German spelling
+  requires it, and German legal terminology rather than Austrian or Swiss.
+- A label is translated as the label alone. "Date:" becomes "Datum:" and
+  nothing more; never add a date, amount or name the source does not have.
+{end}
 - Never alter a numeric value. Formatting may follow {TGT} convention;
   the quantity, date, or time denoted must be identical.
 - The source may already contain the token OCR_ILLEGIBLE, put there by the
@@ -22,6 +36,7 @@ Rules:
   that marker was read successfully, however fragmentary it looks. Short
   labels, postal codes, addresses, column headings and isolated figures are
   normal in these documents and must be translated, not discarded.
+{when PAIR=sl-en,en-sl}
 - A segment that is not a sentence is still a segment. Column headings,
   form labels, table captions and single words must be rendered in {TGT}:
   "Datum" becomes "Date", "Znesek" becomes "Amount", "Namen plačila"
@@ -29,6 +44,16 @@ Rules:
   only for the things listed above as verbatim — personal and place names,
   case and account numbers, codes. So "1000 Ljubljana" stays as it is,
   while "Datum plačila" does not.
+{end}
+{when PAIR=en-de}
+- A segment that is not a sentence is still a segment. Column headings,
+  form labels, table captions and single words must be rendered in {TGT}:
+  "Date" becomes "Datum", "Amount" becomes "Betrag", "Payment purpose"
+  becomes "Verwendungszweck". Reproducing the source unchanged is correct
+  only for the things listed above as verbatim — personal and place names,
+  case and account numbers, codes. So "London EC4A 1NL" stays as it is,
+  while "Date of payment" does not.
+{end}
 - Match the formal register of legal documents.
 
 {GLOSSARY}

@@ -94,7 +94,7 @@ read -r MODEL_NOW PROMPT_NOW < <(python3 -c '
 import os, sys
 sys.path.insert(0, os.path.join("'"$BIN"'", "..", "lib"))
 import trlib
-print(trlib.MODEL, trlib.PROMPT_VERSION)' 2>/dev/null)
+print(trlib.MODEL or "(none)", trlib.PROMPT_VERSION)' 2>/dev/null)
 MODEL_NOW="${MODEL_NOW:-unknown}"; PROMPT_NOW="${PROMPT_NOW:-unknown}"
 DELIV="$TR_ROOT/work/deliverables.tsv"
 
@@ -205,6 +205,7 @@ cat <<BANNER
   PROJECT: $PROJECT
   root:    $TR_ROOT
   pair:    ${TR_SRC:-sl} -> ${TR_TGT:-en}
+  model:   $MODEL_NOW  (prompt $PROMPT_NOW)
   files:   ${#FILES[@]}
   log:     $LOG
 ========================================================
@@ -217,6 +218,33 @@ elif [[ ! -f "$MANIFEST" && $# -eq 0 ]]; then
 elif [[ $ALL -eq 1 ]]; then
   echo "  --all given: ignoring the inventory, translating everything."
 fi
+# The model has to exist before hours are committed to it. Without this a
+# missing model does not stop the run: every segment fails its three
+# retries, is written as [TRANSLATION FAILED], and the batch reports its
+# files as done.
+if [[ $DRY -eq 0 && ${#FILES[@]} -gt 0 ]]; then
+  if ! python3 - "$MODEL_NOW" <<'PY'
+import json, os, sys, urllib.request
+want = sys.argv[1]
+pair = f"{os.environ.get('TR_SRC', 'sl')} -> {os.environ.get('TR_TGT', 'en')}"
+if want in ("(none)", "unknown", ""):
+    sys.exit(f"  No model is chosen for {pair}. Set TR_MODEL in project.conf.")
+url = os.environ.get("TR_OLLAMA", "http://127.0.0.1:11434") + "/api/tags"
+try:
+    with urllib.request.urlopen(url, timeout=10) as r:
+        names = {m["name"] for m in json.load(r)["models"]}
+except Exception as e:
+    sys.exit(f"  Ollama is not answering at {url}: {e}")
+if want not in names and want + ":latest" not in names:
+    sys.exit(f"  The model for {pair}, {want}, is not installed in Ollama.\n"
+             f"  Register it with tr-model (see its usage), or set TR_MODEL "
+             f"in project.conf.")
+PY
+  then
+    exit 2
+  fi
+fi
+
 # Writing into the wrong project is the failure mode this layout introduces.
 if [[ -t 0 && $DRY -eq 0 && ${#FILES[@]} -gt 0 ]]; then
   read -r -p "Proceed with project '$PROJECT'? [y/N] " ans

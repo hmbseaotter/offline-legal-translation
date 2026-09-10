@@ -92,7 +92,10 @@ LABEL = {
     "unknown": "undetermined",
 }
 
-TARGET = "sl"                 # the only class that gets translated
+# The class calibrate_lang.py measures recall and false positives for. What
+# gets translated is the project's TR_SRC, which tr-run and tr-inventory
+# read for themselves.
+TARGET = "sl"
 
 MIN_TOKENS = 60               # below this, abstain rather than guess
 MIN_CONFIDENCE = 0.30

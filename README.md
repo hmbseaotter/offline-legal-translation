@@ -1,9 +1,9 @@
 # offline-legal-translation
 
-An offline Slovene↔English legal translation pipeline. It produces draft
-translations on one machine with no network egress, so a certifying
-translator edits rather than translates from scratch — and so that client
-material never leaves the premises.
+An offline legal translation pipeline — Slovene↔English, and
+English↔German. It produces draft translations on one machine with no
+network egress, so a certifying translator edits rather than translates
+from scratch — and so that client material never leaves the premises.
 
 Built for a real matter: a bundle of prosecution evidence, mostly scanned,
 under a confidentiality obligation that made every cloud translation service
@@ -43,8 +43,13 @@ tr-lint               deterministic checks; the reviewer's worklist
 tr-terms              terms the model rendered two ways; glossary candidates
 ```
 
-Inference is local, through [Ollama](https://ollama.com), against a Slovene
-continual-pretrained Gemma (`GaMS3-12B`, Q8). Word documents, spreadsheets,
+Inference is local, through [Ollama](https://ollama.com), with the model
+chosen by language pair: a Slovene continual-pretrained Gemma (`GaMS3-12B`,
+Q8) for Slovene↔English, and `EuroLLM-9B-Instruct-2512` (Q8) for
+English↔German, a language the Slovene model was never trained on. The
+prompt's rules differ by target language inside one file, and its version
+is a hash of the text each pair is sent, so an edit cannot go unversioned.
+Word documents, spreadsheets,
 plain text and scanned PDFs each have a worker; filenames and the shape of
 the client's folder tree are preserved into the deliverable.
 
@@ -105,6 +110,11 @@ shape: 370 cells cost more than 2,255 words of prose, because each call pays
 a near-fixed overhead regardless of length. Batching short segments cut that
 by 4×; it does not help prose, where generation genuinely dominates.
 
+English→German runs on a different model with a different cost shape:
+EuroLLM-9B measured about 10 seconds a segment, and most of that is
+generation rather than reading the prompt, so the batching that paid 4× on
+Slovene spreadsheets pays much less there.
+
 Every threshold in the tooling — the OCR confidence floor, the vision gate,
 the unreadable-rate bands — carries the measurement it came from and the
 sample size, in the code, next to the number.
@@ -151,9 +161,10 @@ reference cannot fall out of step with them.
 
 ## What this is not
 
-A product. It is one language pair, one workflow, and one machine's measured
-performance. The thresholds come from small samples and say so. German is
-scaffolded but unverified. It is published because the constraints — offline
+A product. It is two language pairs, one workflow, and one machine's
+measured performance. The thresholds come from small samples and say so.
+English→German is measured for speed, but its drafts have not yet been
+reviewed by a translator. It is published because the constraints — offline
 inference, a confidentiality boundary that has to be structural rather than
 remembered, and OCR whose errors are fluent — produced decisions worth
 reading, not because it generalises.

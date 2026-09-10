@@ -161,9 +161,9 @@ def main():
         sys.exit("no translation memory yet - run tr-run first")
     db = sqlite3.connect(dbp)
     gloss = trlib.load_glossary()
-    raw = db.execute(
-        "SELECT key, src, tgt, direction FROM tm WHERE model = ? AND "
-        "prompt_version = ?", (trlib.MODEL, trlib.PROMPT_VERSION)).fetchall()
+    # The key carries the model and prompt version routed for each row's
+    # direction, so matching it is the whole filter.
+    raw = db.execute("SELECT key, src, tgt, direction FROM tm").fetchall()
     db.close()
 
     # Only what tr-run would reuse today; superseded glossary rows would show

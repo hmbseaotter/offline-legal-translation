@@ -1,7 +1,8 @@
 # Offline legal translation kit
 
-Scripts that drive a **local** language model (Ollama, `gams3:q8`) to produce
-draft translations of legal documents, EN↔SL, later DE.
+Scripts that drive **local** language models through Ollama — `gams3:q8` for
+EN↔SL, `eurollm9b-2512:q8` for EN↔DE — to produce draft translations of legal
+documents.
 
 ---
 
@@ -98,7 +99,7 @@ flattens the tree.
 | `case-init` / `case-open` / `case-close` / `case-status`            | Encrypted container                                                                                                                                                                                                                                                                          |
 | `tr-project [--new] <name>`                                         | List, create, or switch the active project                                                                                                                                                                                                                                                   |
 | `tr-setup`                                                          | One-time provisioning. Idempotent.                                                                                                                                                                                                                                                           |
-| `tr-model`                                                          | Register the GGUF with Ollama as `gams3:q8`                                                                                                                                                                                                                                                  |
+| `tr-model [hf-tag] [name]`                                          | Register a GGUF with Ollama. No arguments: GaMS3 as `gams3:q8`, for sl↔en. For en↔de: `tr-model hf.co/mradermacher/EuroLLM-9B-Instruct-2512-GGUF:Q8_0 eurollm9b-2512:q8`                                                                                                                     |
 | `tr-fixtures [dir]`                                                 | Generate synthetic test documents, including a mixed-language drop                                                                                                                                                                                                                           |
 | `tr-inventory [--rescan] [--no-ocr] [--limit N]`                    | Classify every file in `source/` by source language. Run this before anything else. Against a real drop it is **operator only** — it opens every client file; against the fixture drop it is the documented development path                                                                 |
 | `tr-inventory --count [--with-ocr]`                                 | Words and segments per file, to size the job before starting. Scanned PDFs need `--with-ocr`                                                                                                                                                                                                 |
@@ -120,29 +121,29 @@ flattens the tree.
 ## Environment
 
 <!-- GENERATED:env -->
-| Variable            | Default                                  | Purpose                                                                              |
-|---------------------|------------------------------------------|--------------------------------------------------------------------------------------|
-| TR_PROJECTS         | ~/translation-work/confidential-projects | Container root holding all projects                                                  |
-| TR_ROOT             | (active project)                         | Override to target one project for a single command                                  |
-| TR_MODEL            | gams3:q8                                 | Model alias used by every script                                                     |
-| TR_SRC / TR_TGT     | sl / en                                  | Per-project, in project.conf. Use de for German                                      |
-| TR_SUFFIX           | (empty)                                  | Per-project, in project.conf. Set if the client requires it                          |
-| TR_NUM_CTX          | 8192                                     | Context window. Lower if memory is tight                                             |
-| TR_PROMPT_VERSION   | v6                                       | Part of the cache key. Bump to force retranslation                                   |
-| TR_OCR_LANGS        | slv+eng                                  | Tesseract languages. Add deu for German                                              |
-| TR_OLLAMA           | http://127.0.0.1:11434                   | Ollama endpoint                                                                      |
-| TR_DICTS            | /usr/share/hunspell                      | Where tr-inventory looks for the hunspell word lists it detects language with        |
-| TR_OCR_SAMPLE_LANGS | slv+hrv+eng                              | Tesseract languages for the detection sampling pass on scanned PDFs                  |
-| TR_VENV             | ~/.translate-venv                        | Python environment the scripts re-exec into. Set before tr-setup to put it elsewhere |
-| TR_NO_REEXEC        | (unset)                                  | Set to 1 to stay on the system interpreter. Diagnostics only; imports will fail      |
-| CASE_IMG            | ~/.case/confidential.luks                | The LUKS container file. Read by case-init, case-open, case-status                   |
-| CASE_MAP            | casedata                                 | Device-mapper name while the container is unlocked                                   |
-| TR_VISION_MODEL     | deepseek-ocr:3b                          | Second OCR engine used by ocr-check.py. qwen3.6 is the fallback                      |
-| TR_VISION_PROMPT    | Extract the text in the image.           | Prompt for that model. It transcribes; it does not follow instructions               |
-| TR_OCR_MIN_CONF     | 40                                       | Tesseract confidence floor in tr-ocrtext. Below it, a word is marked unreadable      |
-| TR_ILLEGIBLE_MARK   | OCR_ILLEGIBLE                            | What tr-ocrtext writes in place of a word it could not read                          |
-| CLAUDE_DESKTOP_BIN  | /usr/bin/claude-desktop                  | The real binary case-guard-desktop launches once it has checked the mount            |
-| CASE_MNT            | ~/translation-work/confidential-projects | Where the container mounts. Also what the claude guard checks                        |
+| Variable            | Default                                  | Purpose                                                                                                                                                        |
+|---------------------|------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| TR_PROJECTS         | ~/translation-work/confidential-projects | Container root holding all projects                                                                                                                            |
+| TR_ROOT             | (active project)                         | Override to target one project for a single command                                                                                                            |
+| TR_MODEL            | (by language pair)                       | Overrides the model chosen for the pair: gams3:q8 for sl↔en, eurollm9b-2512:q8 for en↔de, none for sl↔de. Set it in a project's project.conf, not in ~/.bashrc |
+| TR_SRC / TR_TGT     | sl / en                                  | Per-project, in project.conf. Any two of sl, en, de                                                                                                            |
+| TR_SUFFIX           | (empty)                                  | Per-project, in project.conf. Set if the client requires it                                                                                                    |
+| TR_NUM_CTX          | 8192                                     | Context window. Lower if memory is tight                                                                                                                       |
+| TR_PROMPT_VERSION   | (from the prompt text)                   | Override only. Derived per pair from the prompt text actually sent, so editing the prompt changes it; sl↔en is v6                                              |
+| TR_OCR_LANGS        | slv+eng                                  | Tesseract languages of the source documents: eng for an English drop, deu for German                                                                           |
+| TR_OLLAMA           | http://127.0.0.1:11434                   | Ollama endpoint                                                                                                                                                |
+| TR_DICTS            | /usr/share/hunspell                      | Where tr-inventory looks for the hunspell word lists it detects language with                                                                                  |
+| TR_OCR_SAMPLE_LANGS | slv+hrv+eng                              | Tesseract languages for the detection sampling pass on scanned PDFs                                                                                            |
+| TR_VENV             | ~/.translate-venv                        | Python environment the scripts re-exec into. Set before tr-setup to put it elsewhere                                                                           |
+| TR_NO_REEXEC        | (unset)                                  | Set to 1 to stay on the system interpreter. Diagnostics only; imports will fail                                                                                |
+| CASE_IMG            | ~/.case/confidential.luks                | The LUKS container file. Read by case-init, case-open, case-status                                                                                             |
+| CASE_MAP            | casedata                                 | Device-mapper name while the container is unlocked                                                                                                             |
+| TR_VISION_MODEL     | deepseek-ocr:3b                          | Second OCR engine used by ocr-check.py. qwen3.6 is the fallback                                                                                                |
+| TR_VISION_PROMPT    | Extract the text in the image.           | Prompt for that model. It transcribes; it does not follow instructions                                                                                         |
+| TR_OCR_MIN_CONF     | 40                                       | Tesseract confidence floor in tr-ocrtext. Below it, a word is marked unreadable                                                                                |
+| TR_ILLEGIBLE_MARK   | OCR_ILLEGIBLE                            | What tr-ocrtext writes in place of a word it could not read                                                                                                    |
+| CLAUDE_DESKTOP_BIN  | /usr/bin/claude-desktop                  | The real binary case-guard-desktop launches once it has checked the mount                                                                                      |
+| CASE_MNT            | ~/translation-work/confidential-projects | Where the container mounts. Also what the claude guard checks                                                                                                  |
 <!-- /GENERATED:env -->
 
 ## Design invariants
@@ -195,10 +196,13 @@ Do not change these without discussing with the operator first.
    canonicalises months and clock times before comparing numbers — without
    that, every date in the corpus raised a NUM finding and buried the real
    ones. German is not English here: it keeps the 24-hour clock and writes
-   `5. März 2024`, so verify that pair before extending to it.
+   `5. März 2024` — `localize()` converts en→de, and no other German pair.
    One file holds the prompt: `prompts/translate.txt`, read from the kit by
    `trlib.build_prompt()`. A missing file is a loud refusal, not a silent
-   fallback. Changing it means bumping `TR_PROMPT_VERSION` under invariant 7.
+   fallback. Rules that differ by language sit in `{when TGT=de}` … `{end}`
+   blocks (conditions on `SRC`, `TGT` or `PAIR`), so the rules every pair
+   shares are written once and a Slovene→English call is not sent German
+   rules it would pay for in prefill.
    It was two — a `_DEFAULT_PROMPT` constant in `lib/trlib.py` as well, with
    a note here that they must agree. Nothing read the shipped file at all, so
    they were identical by luck, and the first edit to either would have made
@@ -220,8 +224,14 @@ Do not change these without discussing with the operator first.
    audit pass belongs elsewhere. The blind spot is a famous provision
    paraphrased without a citation marker.
 7. **The memory is the resume state.** `work/tm.sqlite` keys on
-   `sha256(direction, model, prompt_version, source)`. Changing the prompt
-   must bump `TR_PROMPT_VERSION` or stale translations get reused.
+   `sha256(direction, model, prompt_version, source)`, plus the glossary
+   terms that applied. Model and version are both chosen per direction:
+   `trlib.model_for()` routes the pair (`TR_MODEL` overrides), and
+   `trlib.prompt_version()` is a hash of the prompt text that pair is
+   actually sent, so any edit to the prompt changes it by itself. It was a
+   string bumped by hand, and a forgotten bump reused stale translations.
+   The two v6 texts still map to `v6`, so memory written under that name
+   stays valid; `TR_PROMPT_VERSION` remains as an override.
 8. **`tr-lint` runs no model.** It must stay deterministic and fast.
 9. **Projects are isolated.** Each has its own `work/tm.sqlite`. Translation
    memory must never be shared across matters — different clients, different
