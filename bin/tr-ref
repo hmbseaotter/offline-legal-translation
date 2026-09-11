@@ -224,7 +224,7 @@ def main():
 
     # What tr-run will write for each sentence, worked out the way it will:
     # from the same store, with the same glossary.
-    gloss = trlib.load_glossary()
+    gloss = trlib.load_glossary(tgt_lang)
     resolved = {sn: trref.resolve(rs, reuse_as, sn, gloss) for sn, rs
                 in trref.load_references().get(direction, {}).items()}
     options = sorted(sn for sn, (text, _shown, _ranked) in resolved.items()

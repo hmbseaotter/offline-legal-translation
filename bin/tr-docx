@@ -81,7 +81,7 @@ def main():
     a = ap.parse_args()
     a.src, a.tgt = trlib.translation_pair(a.src, a.tgt)
 
-    gloss = trlib.load_glossary()
+    gloss = trlib.load_glossary(a.tgt)
     doc = docx.Document(a.inp)
 
     pars = [p for p in iter_paragraphs(doc) if p.text.strip()]

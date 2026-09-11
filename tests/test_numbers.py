@@ -1,5 +1,6 @@
 """Dates, amounts and times: conversion, comparison, and choosing between
-replies. Audit 2026-09-10: H-5, H-6, H-7, M-1, M-2, M-3, L-2."""
+replies. Audit 2026-09-10: H-5, H-6, H-7, M-1, M-2, M-3, L-2, L-7, L-8, L-9,
+L-10."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import unittest
@@ -64,6 +65,10 @@ class Localize(unittest.TestCase):
     def test_slovene_month_names(self):
         for v in ("5. marec 2024", "5. marca 2024"):
             self.assertEqual(trlib.localize(v, "sl", "en"), "March 5, 2024")
+
+    def test_every_currency_marks_an_amount(self):
+        for v in ("12,450.00 GBP", "Fr. 20.00", "20.00 Fr.", "CHF 1250.50", "1.000 SIT"):
+            self.assertFalse(trlib.is_translatable(v), v)
 
 
 class FixNumericFormat(unittest.TestCase):
@@ -337,6 +342,20 @@ class SwissDrafts(unittest.TestCase):
         for draft in ("Fr. 20.-", "CHF 20.–", "Fr. 20.—", f"Fr. 20.{WJ}–", "20.00 CHF"):
             self.assertEqual(self.finish("x", draft), f"Fr.{NBSP}20.{WJ}–", draft)
         self.assertEqual(self.finish("CHF 20.00 million", "CHF 20.00 Mio."), "CHF 20.00 Mio.")
+
+    def test_whole_francs_keep_four_digits_together(self):
+        self.assertEqual(self.finish("x", "Fr. 1 250.–"), f"Fr.{NBSP}1250.{WJ}–")
+        self.assertEqual(self.finish("x", f"CHF 12{NBSP}450.00"), f"Fr.{NBSP}12{NBSP}450.{WJ}–")
+
+    def test_fr_does_not_end_a_sentence(self):
+        self.assertEqual(trlib.segment("Die Gebühr beträgt Fr. 20.– pro Monat."),
+                         ["Die Gebühr beträgt Fr. 20.– pro Monat."])
+
+    def test_sharp_s_is_kept_in_any_case_and_inflected(self):
+        self.assertEqual(trlib.swiss_spelling("STRAßE 5", "Straße 5"), "Straße 5")
+        self.assertEqual(trlib.swiss_spelling("Mr Strauß", "Straußens Vertrag"),
+                         "Straußens Vertrag")
+        self.assertEqual(trlib.swiss_spelling("The street", "Die Straße"), "Die Strasse")
 
 
 class SwissLint(unittest.TestCase):

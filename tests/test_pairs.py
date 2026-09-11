@@ -1,9 +1,10 @@
 """Language pairs: a German source is refused until language detection knows
 German and German->English has rules of its own; an unknown language, or a
 pair no model is chosen for, is refused before anything is drafted. Audit
-2026-09-10: H-9, M-15, L-4."""
+2026-09-10: H-9, M-15, L-4, L-5."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
+import os
 import unittest
 
 import trlib
@@ -44,6 +45,16 @@ class Pairs(unittest.TestCase):
         code, out = support.run("tr-run", root, "-n", f"{root}/source/a.docx")
         self.assertEqual(code, 2, out)
         self.assertNotIn("would", out)
+
+    def test_a_swiss_glossary_follows_the_target_given(self):
+        path = os.path.join(trlib.ROOT, "glossary", "project.tsv")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        support.write_text(path, "Zzzstreet\tZzzstraße\n")
+        try:
+            self.assertIn(("Zzzstreet", "Zzzstrasse"), trlib.load_glossary("de-CH"))
+            self.assertIn(("Zzzstreet", "Zzzstraße"), trlib.load_glossary("de"))
+        finally:
+            os.remove(path)
 
 
 if __name__ == "__main__":

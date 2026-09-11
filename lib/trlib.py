@@ -825,8 +825,9 @@ ABBREV = [
     # English legal
     "no", "art", "sec", "para", "pp", "cf", "eg", "ie", "etc", "vs", "v",
     "mr", "mrs", "ms", "jr", "sr", "inc", "ltd", "co", "corp",
-    # German
-    "bzw", "ggf", "usw", "z.B", "u.a", "Abs", "Nr", "vgl", "Bd",
+    # German. Fr. is the franc in Fr. 20.–, which Swiss references write
+    # everywhere, and a title before a name in English and German alike.
+    "bzw", "ggf", "usw", "z.B", "u.a", "Abs", "Nr", "vgl", "Bd", "Fr",
 ]
 _ABBR_RE = re.compile(
     r"(?:\b(?:" + "|".join(re.escape(a) for a in ABBREV) + r")\.)$",
@@ -1346,11 +1347,13 @@ def swiss_spelling(source, text):
     source says Strauß, so does the draft, while a word the draft translated
     is converted.
     """
-    keep = set(_SHARP_S.findall(source or ""))
+    keep = {w.lower() for w in _SHARP_S.findall(source or "")}
 
     def swap(m):
         word = m.group(0)
-        if word in keep:
+        # In any case, and with an ending added: the source's STRAßE is the
+        # draft's Straße, and its Strauß the draft's Straußens.
+        if any(word.lower().startswith(k) for k in keep):
             return word
         upper = word.replace("ß", "").isupper()
         return word.replace("ẞ", "SS").replace("ß", "SS" if upper else "ss")
@@ -1684,12 +1687,15 @@ def nontranslatable_kept(frag, tgt, src_lang, tgt_lang):
 
 # ---------------------------------------------------------------- glossary
 
-def load_glossary():
+def load_glossary(target=None):
     """Shared base terminology, then project terms. Project wins on conflict.
 
     Base holds general legal terminology reusable across matters. The project
     file holds case-specific renderings. Keeping them separate means a new
     project inherits settled terminology without inheriting case content.
+
+    target is the language drafted into, TR_TGT unless given: a worker told
+    --to de-CH gets Swiss spelling whatever the environment says.
     """
     merged = {}
     # The project overlay is resolved only when a project is actually
@@ -1713,8 +1719,8 @@ def load_glossary():
     # A Swiss project's terms in Swiss spelling, so the prompt shows the model
     # ss and tr-lint checks for it. A term's own source form stands in for the
     # source sentence: an entry with ß on both sides, such as a name, keeps it.
-    if _env_target() == "de-CH":
-        terms = [(term, swiss_spelling(term, target)) for term, target in terms]
+    if (target or _env_target()) == "de-CH":
+        terms = [(term, swiss_spelling(term, rendering)) for term, rendering in terms]
     return terms
 
 def glossary_block(text, gloss, limit=40):
@@ -2301,9 +2307,13 @@ def _whole_francs(text):
     """Whole franc amounts as Fr. 20.–, held on one line: a no-break space
     after Fr., and a word joiner before the dash. Without them LibreOffice set
     "Fr. 20." at the end of a line and the dash at the start of the next; with
-    the joiner alone it left Fr. behind instead."""
-    return _WHOLE_FRANCS.sub(
-        lambda m: f"Fr.{NBSP}{m.group('a') or m.group('b')}.{WJ}–", text)
+    the joiner alone it left Fr. behind instead. Four digits are written
+    together and five or more in groups, as elsewhere: Fr. 1250.–."""
+    def francs(m):
+        digits = re.sub(r"\D", "", m.group("a") or m.group("b"))
+        whole = digits if len(digits) <= 4 else _regroup(digits, NBSP)
+        return f"Fr.{NBSP}{whole}.{WJ}–"
+    return _WHOLE_FRANCS.sub(francs, text)
 
 
 def finish_draft(src, tgt, src_lang, tgt_lang):

@@ -8,8 +8,11 @@
 \d+[-/]\d+([-/]\d+)*
 # Dates in Slovene/German format:  5. 3. 2024   05.03.2024
 \d{1,2}\.\s?\d{1,2}\.\s?\d{2,4}\.?
-# Monetary amounts with currency
-[\d.,]+\s?(EUR|USD|CHF|€|\$)
+# Monetary amounts with the currency after or before them: 12.450,00 EUR,
+# CHF 1250.50, £12,450.00. The currencies are trlib's _CURRENCY; SIT is the
+# Slovenian tolar, which documents from before 2007 still carry.
+[\d.,]+\s?(EUR|USD|CHF|GBP|SIT|Fr\.|€|\$|£)
+(EUR|USD|CHF|GBP|SIT|Fr\.|€|\$|£)\s?[\d.,]*\d
 # Statute short forms, numbered:  KZ-1, ZGD-1, ZDavP-2, ZPIZ-2
 # This form is structurally distinctive and needs no maintenance.
 \b[A-ZČŠŽ][A-Za-zČčŠšŽž]{1,9}-\d+[A-Z]?\b

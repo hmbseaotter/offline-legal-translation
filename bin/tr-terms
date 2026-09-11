@@ -186,7 +186,7 @@ def main():
     src_lang, tgt_lang = trlib.project_pair()
     sstop = STOP.get(trlib.base_lang(src_lang), EN_STOP)
     tstop = STOP.get(trlib.base_lang(tgt_lang), EN_STOP)
-    gloss = trlib.load_glossary()
+    gloss = trlib.load_glossary(tgt_lang)
 
     if a.reference:
         refp = trlib.path("work", "reference.sqlite")
