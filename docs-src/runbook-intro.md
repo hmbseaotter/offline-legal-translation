@@ -197,7 +197,9 @@ measured.** That version wrote the text with plain `pdftotext`, so nothing
 in it is marked `OCR_ILLEGIBLE` — and `tr-pdf` reused it, so neither did the
 translation. `tr-ocrstat` names those files, and any PDF with no text layer
 yet, and exits non-zero. Step 4 reads each of them again, however unchanged
-the PDF, keeping the old copy as `<name>.txt.unmarked`. A project already
+the PDF, keeping the old copy as `<name>.txt.unmarked` and never writing over
+an earlier one — once `tesseract` and `pdftoppm` are installed; until then
+nothing can mark the layer, and it is left as it is. A project already
 translated from such layers was translated without unreadable words marked:
 after step 4, `tr-run` drafts again every deliverable whose text layer
 changed.

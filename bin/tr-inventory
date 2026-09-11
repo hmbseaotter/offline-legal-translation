@@ -373,7 +373,11 @@ def main():
                 # afternoon of resolving undetermined files. Worse, the
                 # detector's "better" verdict is sometimes "unknown", which
                 # drops the file out of the translation set entirely.
-                if (old and old.get("lang") and old["lang"] != lang
+                # A recorded "unknown" is no one's decision: it is what a scan
+                # gets before it has a text layer, and keeping it held the file
+                # back from tr-run after --with-ocr had read it.
+                if (old and old.get("lang") not in (None, "", "unknown")
+                        and old["lang"] != lang
                         and old.get("method") != "manual"):
                     proposals.append((rel, old["lang"], lang))
                     if not a.accept_revisions:

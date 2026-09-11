@@ -42,6 +42,7 @@ cross-check.
 import argparse
 import os
 import re
+import shutil
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -125,10 +126,15 @@ def main():
         print(f"  their unreadable rate is unknown - not zero:")
         for rel in unmarked:
             print(f"      {rel}")
-        print(f"  Read them again; tr-run then drafts again every deliverable "
-              f"made from a")
-        print(f"  layer that changed:")
-        print(f"      tr-inventory --count --with-ocr")
+        if shutil.which("tesseract") and shutil.which("pdftoppm"):
+            print(f"  Read them again; tr-run then drafts again every deliverable "
+                  f"made from a")
+            print(f"  layer that changed:")
+            print(f"      tr-inventory --count --with-ocr")
+        else:
+            print(f"  Nothing can read them again until tesseract and pdftoppm are "
+                  f"installed (tr-setup).")
+            print(f"  Then:  tr-inventory --count --with-ocr")
         print(f"  Each old layer is kept beside the new one as "
               f"<name>.txt.unmarked.\n")
 

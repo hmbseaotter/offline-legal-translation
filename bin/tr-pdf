@@ -40,7 +40,11 @@ trap 'rm -rf "$TMPDIR"' EXIT
 trap 'exit 130' INT TERM
 
 ONLY=0; [[ "${1:-}" == "--ocr-only" ]] && { ONLY=1; shift; }
-IN="$1"; OUT="${2:-}"
+# Absolute and normalised, like TR_ROOT (lib/guard.sh): given relative, as
+# `tr-pdf --ocr-only source/x.pdf` from the project gives it, the path did not
+# start with $TR_ROOT/source/, and the layer was made under another name
+# from the one tr-run and tr-inventory look for.
+IN="$(realpath -s -m -- "$1")"; OUT="${2:-}"
 # Cache key: the path relative to source/, flattened, not the basename.
 # Keying on the basename meant drop-A/zapisnik.pdf and drop-B/zapisnik.pdf
 # shared one cache entry -- the second file would have been "translated"
@@ -49,15 +53,20 @@ IN="$1"; OUT="${2:-}"
 # duplicate names across drops are expected rather than unlucky.
 rel="${IN#"$TR_ROOT/source/"}"
 if [[ "$rel" == "$IN" ]]; then
-  # Not under source/ -- an ad hoc --ocr-only on some other path. Keep it
-  # readable but make it unique to the full path.
-  rel="$(basename "${IN%.*}")-$(printf '%s' "$IN" | sha256sum | cut -c1-8)"
+  # Not under source/ -- a reference translation, or an ad hoc --ocr-only on
+  # some other path. Readable, but unique to the full path.
+  base="$(basename "${IN%.*}")-$(printf '%s' "$IN" | sha256sum | cut -c1-8)"
+  txt="$OCRDIR/$base.txt"
 else
-  rel="${rel%.*}"
+  # Named by trlib.ocr_layer(), which tr-inventory and tr-ocrstat use too.
+  txt="$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import trlib
+print(trlib.ocr_layer(sys.argv[2]))' "$BIN/../lib" "$rel")"
+  base="$(basename "${txt%.txt}")"
 fi
-base="${rel//\//__}"
 pdf="$OCRDIR/$base.ocr.pdf"
-txt="$OCRDIR/$base.txt"
 
 # The cache belongs to a file's contents, not to its path. A PDF replaced in
 # place kept the text layer of the file it replaced, so a corrected reference
@@ -92,14 +101,27 @@ fi
 # set aside rather than deleted -- renamed, in case anyone corrected it by
 # hand -- and the file is read again properly. The ocrmypdf output is kept,
 # so this costs the Tesseract pass, not the whole OCR.
+#
+# Only where it can be read properly. Without tesseract and pdftoppm,
+# tr-ocrtext makes the same unmarked layer again, so setting it aside looped,
+# every run, over a layer someone may have corrected -- and the copy set
+# aside overwrote the one before it. A copy set aside never replaces another.
 if [[ -f "$txt" ]] && python3 -c '
 import sys
 sys.path.insert(0, sys.argv[1])
 import trlib
 sys.exit(0 if trlib.ocr_layer_unmarked(sys.argv[2]) else 1)' "$BIN/../lib" "$txt"; then
-  mv -f "$txt" "$txt.unmarked"
-  echo "  text layer was made without confidence marking; reading it again"
-  echo "    (previous copy kept as $(basename "$txt").unmarked)"
+  if command -v tesseract >/dev/null && command -v pdftoppm >/dev/null; then
+    keep="$txt.unmarked"
+    [[ -e "$keep" ]] && keep="$txt.unmarked-$(date +%Y%m%d-%H%M%S)"
+    mv "$txt" "$keep"
+    rm -f "$txt.nomarks"
+    echo "  text layer was made without confidence marking; reading it again"
+    echo "    (previous copy kept as $(basename "$keep"))"
+  else
+    echo "  text layer was made without confidence marking, and it cannot be read"
+    echo "    again until tesseract and pdftoppm are installed (tr-setup)"
+  fi
 fi
 
 # Is this a scan at all?

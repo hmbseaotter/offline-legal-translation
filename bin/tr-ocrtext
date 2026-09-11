@@ -115,6 +115,16 @@ def page_text(img):
     return "\n".join(" ".join(w) for w in lines if w), marked, total
 
 
+def unmarked(a, why):
+    """A text layer with no confidence marking, and <layer>.nomarks beside it
+    saying so. trlib.ocr_layer_unmarked() reads that note, so tr-ocrstat does
+    not report the layer as legible and tr-pdf reads the file again once it
+    can. -nopgbrk: a form feed is a character a .docx cannot hold."""
+    subprocess.run(["pdftotext", "-layout", "-nopgbrk", a.pdf, a.out], check=False)
+    with open(a.out + ".nomarks", "w", encoding="utf-8") as fh:
+        fh.write(why + "\n")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("pdf")
@@ -124,7 +134,7 @@ def main():
     if not shutil.which("tesseract") or not shutil.which("pdftoppm"):
         # Fall back rather than fail: a text layer without confidence is
         # still better than no text layer.
-        subprocess.run(["pdftotext", "-layout", a.pdf, a.out], check=False)
+        unmarked(a, "tesseract or pdftoppm was missing")
         print("  (tesseract/pdftoppm missing - no confidence marking)",
               file=sys.stderr)
         return
@@ -139,7 +149,7 @@ def main():
                        capture_output=True, timeout=3600)
         imgs = sorted(f for f in os.listdir(tmp) if f.endswith(".png"))
         if not imgs:
-            subprocess.run(["pdftotext", "-layout", a.pdf, a.out], check=False)
+            unmarked(a, "no page of the PDF could be rendered")
             return
         out, marked, total = [], 0, 0
         for img in imgs:
@@ -149,6 +159,8 @@ def main():
             total += n
         with open(a.out, "w", encoding="utf-8") as fh:
             fh.write("\n\n".join(out) + "\n")
+        if os.path.exists(a.out + ".nomarks"):
+            os.remove(a.out + ".nomarks")
         if marked:
             pct = 100.0 * marked / total if total else 0
             print(f"  {marked} of {total} tokens unreadable ({pct:.0f}%), "

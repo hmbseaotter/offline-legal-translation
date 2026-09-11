@@ -70,5 +70,10 @@ tr_guard_resolve_root() {
     fi
     TR_ROOT="$TR_PROJECTS/$active"
   fi
+  # One spelling of the project's path, as trlib gives the Python tools. A
+  # trailing slash, which tab completion adds, gave tr-pdf a different cache
+  # key from the one tr-inventory looks for, and the file dropped out of
+  # translation as "unknown". -s: symlinks are left as they are.
+  TR_ROOT="$(realpath -s -m -- "$TR_ROOT")"
   export TR_ROOT TR_PROJECTS
 }

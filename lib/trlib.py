@@ -85,7 +85,10 @@ def _resolve_root():
     """TR_ROOT wins. Otherwise use the active project recorded in .active."""
     explicit = os.environ.get("TR_ROOT")
     if explicit:
-        return explicit
+        # One spelling, as lib/guard.sh gives the shell tools: a trailing
+        # slash, which tab completion adds, gave tr-pdf a different cache key
+        # from the one tr-inventory looked for.
+        return os.path.normpath(os.path.abspath(explicit))
     marker = os.path.join(PROJECTS, ".active")
     if os.path.exists(marker):
         name = open(marker, encoding="utf-8").read().strip()
@@ -751,9 +754,12 @@ def ocr_layer_unmarked(txt):
     one-page document, unless given -nopgbrk. tr-ocrtext joins pages with a
     blank line and never writes one, and tr-pdf's born-digital branch passes
     -nopgbrk. So a form feed means the layer came from somewhere that did not
-    keep Tesseract's confidence, including tr-ocrtext's own fallback when
-    tesseract is missing -- which marks nothing either.
+    keep Tesseract's confidence. tr-ocrtext's own fallback, when tesseract or
+    pdftoppm is missing, marks nothing either; it writes <layer>.nomarks
+    beside the layer instead of a form feed, which a .docx cannot hold.
     """
+    if os.path.exists(txt + ".nomarks"):
+        return True
     try:
         with open(txt, encoding="utf-8", errors="replace") as fh:
             return "\f" in fh.read()

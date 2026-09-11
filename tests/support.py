@@ -131,6 +131,27 @@ def write_pdf(path, lines):
         fh.write(out)
 
 
+def can_scan():
+    """Can image_pdf() run here, and OCR read what it makes?"""
+    return all(shutil.which(t) for t in ("ocrmypdf", "tesseract", "pdftoppm", "python3")) \
+        and subprocess.run(["python3", "-c", "import img2pdf"],
+                           capture_output=True).returncode == 0
+
+
+def image_pdf(path, lines):
+    """A PDF holding only a picture of the text, as a scanner makes one.
+    Built with the system python3's img2pdf, which the kit venv lacks."""
+    text = path + ".text.pdf"
+    write_pdf(text, lines)
+    subprocess.run(["pdftoppm", "-png", "-r", "150", "-singlefile", text, path + ".page"],
+                   check=True)
+    subprocess.run(["python3", "-c", "import sys, img2pdf; open(sys.argv[2], 'wb')"
+                    ".write(img2pdf.convert(sys.argv[1]))", path + ".page.png", path],
+                   check=True)
+    os.remove(text)
+    os.remove(path + ".page.png")
+
+
 class Mock:
     """tests/mock_ollama.py on a free port, answering by rules (see there)."""
 

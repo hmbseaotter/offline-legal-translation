@@ -35,7 +35,7 @@ producing plaintext where the encryption is not.
 
 ```
 tr-inventory          classify every file by source language
-tr-inventory --count  OCR the scans, count source words, size the job
+tr-inventory --count  count source words, size the job (--with-ocr: OCR the scans)
 tr-ocrstat            per-file unreadable rate, against measured thresholds
 ocr-check.py          read a page with two engines, compare the numbers
 tr-ref                line up earlier translations; reuse their sentences
