@@ -195,11 +195,12 @@ or if any text layer cannot be measured.
 **A text layer made by an earlier `tr-inventory --with-ocr` cannot be
 measured.** That version wrote the text with plain `pdftotext`, so nothing
 in it is marked `OCR_ILLEGIBLE` — and `tr-pdf` reused it, so neither did the
-translation. `tr-ocrstat` names those files instead of reporting them at 0%,
-and step 4 reads them again, keeping the old copy as `<name>.txt.unmarked`.
-A project already translated from such layers was translated without
-unreadable words marked; re-running step 4 and then `tr-run` there
-retranslates the affected PDFs.
+translation. `tr-ocrstat` names those files, and any PDF with no text layer
+yet, and exits non-zero. Step 4 reads each of them again, however unchanged
+the PDF, keeping the old copy as `<name>.txt.unmarked`. A project already
+translated from such layers was translated without unreadable words marked:
+after step 4, `tr-run` drafts again every deliverable whose text layer
+changed.
 
 **6. Read what it flags.** For every file in the `look` or `STOP` band, open
 its text layer against the page images:

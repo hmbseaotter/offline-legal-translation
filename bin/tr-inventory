@@ -112,33 +112,20 @@ def from_text(path, limit=SAMPLE_WORDS):
     return _cap(raw.split(), limit), "text"
 
 
-def _ocr_key(path):
-    """tr-pdf's cache key for this file: the path under source/, flattened.
-
-    Not the basename. Two exhibits called zapisnik.pdf in different drops
-    would have shared one entry, and the second would have been translated
-    from the first one's text layer with nothing in the output to show it.
-    Drops arrive nested and filenames are preserved by design, so duplicate
-    names across drops are expected rather than unlucky. tr-pdf builds the
-    same key; the two must agree or the cache is never hit.
-    """
-    root = trlib.ROOT
-    if not root:
-        return None
-    src = os.path.join(root, "source") + os.sep
-    full = os.path.abspath(path)
-    if not full.startswith(src):
-        return None
-    return os.path.splitext(full[len(src):])[0].replace(os.sep, "__")
-
-
 def _ocr_cache(path):
-    """The cached OCR text layer for this file, if tr-pdf has made one."""
+    """The cached OCR text layer for this file, if tr-pdf has made one.
+
+    Named by trlib.ocr_layer() from the path under source/, not the basename.
+    Two exhibits called zapisnik.pdf in different drops would have shared one
+    entry, and the second would have been translated from the first one's
+    text layer with nothing in the output to show it.
+    """
     try:
-        key = _ocr_key(path)
-        if not key:
+        src = os.path.join(trlib.ROOT, "source") + os.sep
+        full = os.path.abspath(path)
+        if not trlib.ROOT or not full.startswith(src):
             return None
-        cached = os.path.join(trlib.ROOT, "work", "ocr", key + ".txt")
+        cached = trlib.ocr_layer(full[len(src):])
         return cached if os.path.exists(cached) else None
     except Exception:
         return None
@@ -352,7 +339,14 @@ def main():
         # A row counted earlier is reusable; one that was only sampled is not,
         # when counting is what was asked for.
         counted = old.get("words", "") not in ("", "-") if old else False
-        if old and not a.rescan \
+        # --with-ocr asks for the text layer tr-pdf translates from. A PDF
+        # whose layer is missing, or was made without confidence marking, is
+        # read again however unchanged the file is: reusing its row left the
+        # unmarked layer in place, with tr-ocrstat advising this very command.
+        layer = trlib.ocr_layer(rel) if rel.lower().endswith(".pdf") else None
+        unread = bool(a.with_ocr and layer and (
+            not os.path.exists(layer) or trlib.ocr_layer_unmarked(layer)))
+        if old and not a.rescan and not unread \
                 and old.get("method") != "not-yet-examined" \
                 and old.get("bytes") == str(st.st_size) \
                 and old.get("mtime") == f"{st.st_mtime:.0f}" \

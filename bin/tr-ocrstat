@@ -75,9 +75,7 @@ def main():
 
     rows, missing, unmarked = [], [], []
     for rel in pdfs:
-        # tr-pdf flattens the source-relative path to name its cache entry.
-        base = os.path.splitext(rel)[0].replace(os.sep, "__")
-        txt = os.path.join(ocr, base + ".txt")
+        txt = trlib.ocr_layer(rel)
         if not os.path.exists(txt):
             missing.append(rel)
             continue
@@ -115,18 +113,23 @@ def main():
 
     print()
     if missing:
-        print(f"  {len(missing)} PDF(s) have no text layer yet. OCR them all "
-              f"in one pass:")
-        print(f"      tr-inventory --count --with-ocr")
-        print(f"  or one at a time:  tr-pdf --ocr-only source/<file>.pdf\n")
+        print(f"  {len(missing)} PDF(s) have no text layer yet:")
+        for rel in missing:
+            print(f"      {rel}")
+        print(f"  Make them all in one pass:")
+        print(f"      tr-inventory --count --with-ocr\n")
 
     if unmarked:
         print(f"  {len(unmarked)} PDF(s) have a text layer made WITHOUT "
               f"confidence marking, so")
-        print(f"  their unreadable rate is unknown - not zero. Read them "
-              f"again:")
+        print(f"  their unreadable rate is unknown - not zero:")
+        for rel in unmarked:
+            print(f"      {rel}")
+        print(f"  Read them again; tr-run then drafts again every deliverable "
+              f"made from a")
+        print(f"  layer that changed:")
         print(f"      tr-inventory --count --with-ocr")
-        print(f"  The old layers are kept beside the new ones as "
+        print(f"  Each old layer is kept beside the new one as "
               f"<name>.txt.unmarked.\n")
 
     if stop:
@@ -138,7 +141,7 @@ def main():
         print(f"  {look} file(s) between 5% and 20%. Open the text layer "
               f"against the page images")
         print(f"  and check what is marked {MARK} before translating.")
-    if fine and not stop and not look and not unmarked:
+    if fine and not stop and not look and not unmarked and not missing:
         print(f"  All {fine} file(s) below 5% unreadable.")
 
     print()
@@ -150,7 +153,7 @@ def main():
     print("      tools/ocr-check.py source/<file>.pdf --pages 2")
     print()
     print("  Text layers:  " + ocr)
-    return 1 if (stop or unmarked) else 0
+    return 1 if (stop or unmarked or missing) else 0
 
 
 if __name__ == "__main__":
