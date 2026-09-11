@@ -100,12 +100,16 @@ than a pass/fail.
 earlier translations of the same kinds of document. `tr-ref` lines each pair
 up sentence by sentence — by length, with the numbers both sides share as
 anchors — and keeps only one-to-one pairs whose numbers agree. An identical
-source sentence then takes the translator's rendering instead of a draft.
-Where the references render a sentence more than one way, the draft offers
-the renderings as `REF_OPTIONS [[…]] | [[…]]`, the one most documents use
-first, and the translator keeps one. A translation read by OCR is offered
-the same way and never reused on its own, because a misreading would pass
-straight into a deliverable.
+source sentence then takes the translator's rendering instead of a draft,
+but only where numbers confirm the alignment. Where a translation omits,
+adds or swaps a sentence, the pairs around the change still look aligned,
+so a sentence nothing confirms is offered as `REF_OPTIONS [[…]] (unconfirmed)`
+rather than reused; a sweep of every such change over invented documents
+reuses no wrong sentence. Where the references render a sentence more than
+one way, the draft offers the renderings as `REF_OPTIONS [[…]] | [[…]]`, the
+one most documents use first, and the translator keeps one. A translation
+read by OCR is offered the same way and never reused on its own, because a
+misreading would pass straight into a deliverable.
 
 **Documentation generated from the source.** The environment table, the
 command reference and the tools list are written from `lib/registry.py` and

@@ -84,19 +84,25 @@ a language suffix — `lease-2023_English.docx` beside
 It lines the pairs up sentence by sentence, without a model, and `tr-run`
 then takes the reference translation for any source sentence identical to
 one it kept. Open `work/reference/pairs.tsv` before translating: every line
-in it can reach a deliverable word for word. Where the references render a
-sentence more than one way, the draft carries the choice instead of a model
-draft:
+in it can reach a deliverable word for word. Numbers confirm the alignment,
+and a sentence nothing confirms — no number of its own or either side — is
+offered rather than reused, as `REF_OPTIONS [[…]] (unconfirmed)`: a
+translation that omits, adds or swaps a sentence leaves the pairs around it
+looking aligned. Where the references render a sentence more than one way,
+the draft carries the choice instead of a model draft:
 
     REF_OPTIONS [[Der Mieter kann kündigen.]] | [[Der Mieter darf kündigen.]]
 
 The rendering found in the most documents comes first, then the newest by
 the date the file itself records, and a pinned glossary term puts the
 rendering that uses it first. A translation read by OCR is offered the same
-way, tagged `(OCR)`, and never reused on its own. Search each deliverable
-for `REF_OPTIONS`, keep one rendering and delete the rest; `tr-ref
---conflicts` lists every rendering with its count and the date that ordered
-it. References stay in this project; nothing reads another project's.
+way, tagged `(OCR)`, and never reused on its own, and so is one rejoined at
+a line-end hyphen that may have been the word's own, tagged `(hyphenation)`.
+Search each deliverable for `REF_OPTIONS`, keep one rendering and delete the
+rest; `tr-ref --conflicts` lists every rendering with its count and the date
+that ordered it. A reference file replaced with a new version is read again;
+one that cannot be read is listed, its sentences are dropped, and `tr-ref`
+exits 1. References stay in this project; nothing reads another project's.
 
 The suffix may be `_English`, `_German`, `_Slovene` or `_EN`, `_DE`, `_SL`,
 in any case, and the two files may be different formats. It names a

@@ -38,13 +38,20 @@ Read pairs.tsv before the first tr-run. Every line marked yes or option can
 go into a deliverable word for word, and an alignment tool that is right
 almost always is still wrong somewhere.
 
+A file that cannot be read -- damaged, or not what its extension says -- is
+listed at the end, its sentences leave reuse until it can be read, and
+tr-ref exits 1. A document aligned under older alignment rules is aligned
+again, and until then tr-run does not reuse its sentences.
+
 WHAT HAPPENS NEXT
 
   tr-run                a source sentence identical to a kept reference
                         sentence takes that translation, with no model call.
                         Where the references disagree -- or the only
-                        rendering was read by OCR, or is in another German
-                        variant -- the draft carries the choice instead:
+                        rendering was read by OCR, lined up with no number
+                        to confirm it, rejoined at a line-end hyphen that may
+                        be the word's own, or is in another German variant --
+                        the draft carries the choice instead:
                             REF_OPTIONS [[…]] | [[…]]
                         Search the deliverables for REF_OPTIONS, keep one
                         rendering and delete the rest
@@ -111,14 +118,29 @@ def main():
     db.commit()
 
     print(f"  {len(pairs)} reference pair(s), {reuse_as}\n")
-    rejected_all = []
+    rejected_all, failed = [], []
+
+    def forget(doc, e):
+        # A document that cannot be read takes its sentences out of reuse
+        # until it can be. Kept from the file it replaced, they would go on
+        # being reused as though they were still in it.
+        print(f"  FAILED     {doc}: {type(e).__name__}: {e}")
+        db.execute("DELETE FROM pairs WHERE direction = ? AND doc = ?", (direction, doc))
+        db.execute("DELETE FROM docs WHERE direction = ? AND doc = ?", (direction, doc))
+        db.commit()
+        failed.append(doc)
+
     for doc, sp, tp, variant in pairs:
         # A pair in another variant is aligned and kept like any other, and
         # says on its line that this project never reuses it.
         elsewhere = trref.reuse_direction(direction, variant)
         vnote = "" if elsewhere == reuse_as else \
             f"   ({elsewhere}: never reused in {reuse_as}, at most offered)"
-        sig = trref.signature(sp, tp)
+        try:
+            sig = trref.signature(sp, tp)
+        except OSError as e:
+            forget(doc, e)
+            continue
         # Read on every run, not only when a pair is aligned: the date orders
         # renderings, and a document unchanged since before dates has none.
         date, date_from = trref.file_date(tp)
@@ -135,27 +157,32 @@ def main():
             sparas, show = trref.paragraphs(sp, src_lang)
             tparas, thow = trref.paragraphs(tp, tgt_base)
         except Exception as e:
-            print(f"  FAILED     {doc}: {type(e).__name__}: {e}")
+            forget(doc, e)
             continue
         paragraphs = show in ("docx", "txt") and thow in ("docx", "txt")
         kept, rejected = trref.align_document(sparas, tparas,
                                               by_paragraph=paragraphs)
         how = show if show == thow else f"{show}/{thow}"
-        reusable = int("pdf-ocr" not in (show, thow))
+        ocr = (trref.OCR,) if "pdf-ocr" in (show, thow) else ()
+        kept = [trref.settle(s, t, ocr + (() if confirmed else (trref.UNCONFIRMED,)))
+                for s, t, confirmed in kept]
         db.execute("DELETE FROM pairs WHERE direction = ? AND doc = ?", (direction, doc))
         db.executemany(
             "INSERT INTO pairs (direction, doc, src, src_norm, tgt, how, reusable,"
-            " variant) VALUES (?,?,?,?,?,?,?,?)",
-            [(direction, doc, s, trref.norm(s), t, how, reusable, variant)
-             for s, t in kept])
+            " variant, offered) VALUES (?,?,?,?,?,?,?,?,?)",
+            [(direction, doc, s, trref.norm(s), t, how, int(not tags), variant,
+              ",".join(tags)) for s, t, tags in kept])
         reasons = collections.Counter(r for _s, _t, r in rejected)
         summary = ", ".join(f"{r} {n}" for r, n in reasons.most_common())
         db.execute("INSERT OR REPLACE INTO docs (direction, doc, signature, kept, "
                    "rejected, date, date_from) VALUES (?,?,?,?,?,?,?)",
                    (direction, doc, sig, len(kept), summary, date, date_from))
         db.commit()
-        rejected_all.extend((doc, s, t, r) for s, t, r in rejected)
-        note = "" if reusable else "   (OCR: offered, never reused)"
+        rejected_all.extend((doc, s.replace(trref.UNSURE, ""),
+                             t.replace(trref.UNSURE, ""), r) for s, t, r in rejected)
+        note = "   (OCR: offered, never reused)" if ocr else "".join(
+            f"   ({n} {tag}: offered)" for tag, n in sorted(collections.Counter(
+                tag for _s, _t, tags in kept for tag in tags).items()))
         print(f"  aligned    kept {len(kept):>5}   rejected {len(rejected):>4}"
               f"   {doc}  [{how}]{note}{vnote}")
         if summary:
@@ -231,6 +258,12 @@ def main():
         else:
             print("  see them:  tr-ref --conflicts")
     print(f"\n  read before tr-run:  {os.path.join(outdir, 'pairs.tsv')}")
+    if failed:
+        print(f"\n  {len(failed)} reference document(s) could not be read; none "
+              f"of their sentences is reused until they can be:")
+        for doc in failed:
+            print(f"      {doc}")
+        return 1
     return 0
 
 

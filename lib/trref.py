@@ -42,20 +42,31 @@ numbers keep their values through translation, and legal text is dense with
 them, so two sentences whose numbers differ are not a pair.
 
 Only one-to-one sentence pairs are kept, and only when their numbers agree,
-their lengths are plausible, and neither side carries OCR_ILLEGIBLE. A
-sentence with no number is kept only where the structure vouches for it: its
-paragraph lined up one-to-one and every sentence in that paragraph did too.
-What is kept may be reused verbatim, so the rules err towards keeping less. A
-pair wrongly rejected costs one model call; a pair wrongly kept puts the
+their lengths are plausible, and neither side carries OCR_ILLEGIBLE. What is
+kept may be reused verbatim, so the rules err towards keeping less. A pair
+wrongly rejected costs one model call; a pair wrongly kept puts the
 translation of a different sentence into a deliverable.
+
+A pair is anchored when both sides carry the same numbers and no sentence
+within three either side, in either document, carries those numbers too. An
+anchored pair may be reused, and so may a pair between two anchored pairs,
+which pin both documents on either side of it. Lengths cannot do that. Where
+a translation omits a sentence, adds a note or swaps two, the one-to-one
+pairs around the change still look right, so a pair with no anchor of its
+own or either side -- no numbers, or numbers its neighbours share -- is never
+reused. Where it lined up one-to-one among one-to-one neighbours it is
+offered instead, tagged (unconfirmed), for the translator to confirm; beside
+anything else it is rejected. tests/test_references.py sweeps omissions,
+insertions and swaps, and fails if a wrong pair is kept for reuse.
 
 EXACT REUSE
 
 A source segment identical to a kept reference sentence, whitespace aside,
 takes that translation with no model call, and never enters the translation
-memory. Renderings that differ only in case or punctuation are one rendering,
-written the way most documents write it. A mark between two digits belongs to
-the number, so 5.1 and 51 remain two.
+memory. Renderings that differ only in punctuation are one rendering, written
+the way most documents write it. Case is not punctuation -- Sie and sie are
+two words -- and nor are a minus sign, % or §. A mark between two digits
+belongs to the number, so 5.1 and 51 remain two.
 
 OPTIONS WHERE THE REFERENCES DISAGREE
 
@@ -80,7 +91,9 @@ made says 2013-12-23 until something saves it.
 
 A translation read by OCR is never reused on its own, because a misreading
 would pass straight into a deliverable. It is offered instead, tagged (OCR),
-where a person reads it before it stays.
+where a person reads it before it stays. So is one rejoined at a line-end
+hyphen that may have been the word's own, tagged (hyphenation), and one
+lined up with nothing to confirm it, tagged (unconfirmed).
 
 A German translation is reused only in a project writing its variant: a Swiss
 one where TR_TGT is de-CH, a Germany one where it is de. Renderings in two
@@ -94,6 +107,7 @@ written in.
 """
 import collections
 import datetime
+import hashlib
 import math
 import os
 import re
@@ -216,13 +230,30 @@ def find_pairs(src_lang, tgt_lang):
     return pairs, unpaired, ambiguous, sorted(unlabelled), sorted(other)
 
 
+# The alignment rules' version, recorded in each document's signature. A
+# document aligned under older rules is aligned again by the next tr-ref, and
+# until then load_references() does not reuse its pairs: a rule that keeps
+# less protects nothing while the pairs an older rule kept are still stored.
+ALIGN_VERSION = 2
+
+
 def signature(*paths):
-    """Size and mtime of each file: enough to notice that one was replaced."""
-    parts = []
+    """What a pair was aligned from: the rules' version and a hash of each
+    file's contents. Size and modified time missed a file replaced by one of
+    the same size whose time was kept, as cp -p keeps it."""
+    parts = [f"a{ALIGN_VERSION}"]
     for p in paths:
-        st = os.stat(p)
-        parts.append(f"{st.st_size}:{st.st_mtime:.0f}")
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        parts.append(h.hexdigest()[:16])
     return "|".join(parts)
+
+
+def current(sig):
+    """Was a document with this signature aligned under today's rules?"""
+    return (sig or "").split("|", 1)[0] == f"a{ALIGN_VERSION}"
 
 
 # ------------------------------------------------------------- extraction
@@ -261,24 +292,47 @@ def _docx_paragraphs(path):
     return [norm(p) for p in out if p.strip()]
 
 
-_HYPHEN_BREAK = re.compile(r"(\w)-\n(?=[a-zäöüßčšž])")
+# A word broken across two lines at a hyphen. Before a capital or a digit
+# the hyphen belongs to the text and stays, with no space: Rhein-Main,
+# EU-Richtlinie, 5-10. Before a lower-case letter nothing in the text says
+# whether a word was hyphenated to fill the line, Verwaltungs-gericht, or
+# broke at its own hyphen, self-employed. The likelier reading for the
+# language is written -- German and Slovene hyphenate to fill a line, English
+# seldom does -- and marked UNSURE, so that tr-ref offers the sentence rather
+# than reusing it. settle() takes the mark out.
+_HYPHEN_BREAK = re.compile(r"(\w)-[ \t]*\n[ \t]*(\w)")
+UNSURE = "\ue000"
+_HYPHENATES = {"de", "sl"}
 
 
-def _blocks(text):
+def _blocks(text, lang=None):
     """Paragraphs of extracted text: blocks between blank lines, lines joined.
 
     A line break inside a block is layout, not a sentence boundary, and
-    segment() treats every newline as one. A word hyphenated across lines is
-    rejoined only when the next line starts in lower case: German capitalises
-    nouns, so "Verwaltungs-\\ngericht" is one word and "Rhein-\\nMain" is two.
+    segment() treats every newline as one.
     """
+    def rejoin(m):
+        a, b = m.group(1), m.group(2)
+        if not b.islower():
+            return f"{a}-{b}"
+        return f"{a}{UNSURE}{b}" if lang in _HYPHENATES else f"{a}-{UNSURE}{b}"
+
     out = []
     for block in re.split(r"\n\s*\n", text.replace("\f", "\n\n")):
-        block = _HYPHEN_BREAK.sub(r"\1", block)
+        block = _HYPHEN_BREAK.sub(rejoin, block)
         joined = norm(block.replace("\n", " "))
         if joined:
             out.append(joined)
     return out
+
+
+def settle(src, tgt, tags=()):
+    """(src, tgt, tags) for a pair about to be stored, with the UNSURE marks
+    taken out. A translation rejoined at an uncertain hyphen gains the tag
+    HYPHENATION, which keeps it from reuse."""
+    if UNSURE in tgt:
+        tags = tuple(tags) + (HYPHENATION,)
+    return src.replace(UNSURE, ""), tgt.replace(UNSURE, ""), tuple(tags)
 
 
 def _pdf_paragraphs(path, lang):
@@ -300,7 +354,7 @@ def _pdf_paragraphs(path, lang):
     how = "pdf-ocr" if os.path.exists(txt[:-len(".txt")] + ".ocr.pdf") \
         else "pdf-text"
     with open(txt, encoding="utf-8", errors="replace") as fh:
-        return _blocks(fh.read()), how
+        return _blocks(fh.read(), lang), how
 
 
 def paragraphs(path, lang):
@@ -310,7 +364,7 @@ def paragraphs(path, lang):
         return _docx_paragraphs(path), "docx"
     if ext == ".txt":
         with open(path, encoding="utf-8", errors="replace") as fh:
-            return _blocks(fh.read()), "txt"
+            return _blocks(fh.read(), lang), "txt"
     return _pdf_paragraphs(path, lang)
 
 
@@ -386,28 +440,34 @@ def align(a, b, ratio):
     return beads[::-1]
 
 
-def _judge(s, t, ratio, structural):
-    """None when the pair is kept, otherwise the reason it is not."""
+# A number agreeing on both sides anchors a pair only when it tells the pair
+# from its neighbours: two sentences in a row with the same numbers could
+# swap places, or shift past a missing sentence, and still agree.
+ANCHOR_WINDOW = 3
+
+
+def _length_ok(s, t, ratio):
+    return len(s) < 20 or 0.5 <= len(t) / (len(s) * ratio) <= 2.0
+
+
+def _judge(s, t, ratio):
+    """None when the pair may be kept, otherwise the reason it may not."""
     if MARK in s or MARK in t:
         return "illegible"
     if not trlib.is_translatable(s):
         return "not translatable"
     if norm(s) == norm(t):
         return "untranslated"
-    ns, nt = trlib.norm_nums(s), trlib.norm_nums(t)
-    if ns != nt:
+    if trlib.norm_nums(s) != trlib.norm_nums(t):
         return "numbers differ"
-    if len(s) >= 20:
-        r = len(t) / (len(s) * ratio)
-        if not 0.5 <= r <= 2.0:
-            return "length"
-    if not ns and not structural:
-        return "no anchor"
+    if not _length_ok(s, t, ratio):
+        return "length"
     return None
 
 
 def align_document(src_paras, tgt_paras, by_paragraph=True):
-    """(kept, rejected): [(src, tgt)] and [(src, tgt, reason)].
+    """(kept, rejected): [(src, tgt, confirmed)] and [(src, tgt, reason)],
+    each in document order.
 
     by_paragraph lines up paragraphs before sentences, which is both faster
     and more reliable -- when both sides have real paragraphs. Text taken
@@ -415,9 +475,11 @@ def align_document(src_paras, tgt_paras, by_paragraph=True):
     layer is one block a page. With either side from a PDF, sentences are
     lined up across the whole document instead.
 
-    A sentence with no number to anchor it is kept only when the sentences
-    either side of it also lined up one-to-one. A run of clean one-to-one
-    pairs is the evidence that the two documents really do correspond there.
+    A confirmed pair may be reused: it is anchored by numbers that it and
+    its counterpart carry and their neighbours do not, or sits between two
+    anchored pairs. An unconfirmed one lined up one-to-one among one-to-one
+    neighbours with nothing to anchor it, and is offered for the translator
+    to confirm. The module docstring says why.
     """
     ls = sum(len(p) for p in src_paras)
     lt = sum(len(p) for p in tgt_paras)
@@ -427,33 +489,59 @@ def align_document(src_paras, tgt_paras, by_paragraph=True):
     else:
         spans = [(0, len(src_paras), 0, len(tgt_paras))]
 
-    # Every sentence bead in document order, with whether its paragraph
-    # lined up one-to-one. A newline between paragraphs keeps a heading from
-    # running into the sentence after it.
-    seq = []
+    # Every sentence bead in document order: its sentences on each side,
+    # whether its paragraph lined up one-to-one, and where its first sentence
+    # stands in each document. A paragraph with no counterpart is a bead too,
+    # and not a one-to-one one, so no pair vouches across it. A newline
+    # between paragraphs keeps a heading from running into the next sentence.
+    seq, src_all, tgt_all = [], [], []
     for i0, i1, j0, j1 in spans:
-        if i0 == i1 or j0 == j1:
-            continue                      # a paragraph with no counterpart
-        ss = trlib.segment("\n".join(src_paras[i0:i1]))
-        ts = trlib.segment("\n".join(tgt_paras[j0:j1]))
-        para_ok = not by_paragraph or (i1 - i0, j1 - j0) == (1, 1)
-        for a, b, c, d in align(ss, ts, ratio):
-            seq.append((ss[a:b], ts[c:d], para_ok))
+        ss = trlib.segment("\n".join(src_paras[i0:i1])) if i1 > i0 else []
+        ts = trlib.segment("\n".join(tgt_paras[j0:j1])) if j1 > j0 else []
+        if ss and ts:
+            para_ok = not by_paragraph or (i1 - i0, j1 - j0) == (1, 1)
+            for a, b, c, d in align(ss, ts, ratio):
+                seq.append((ss[a:b], ts[c:d], para_ok,
+                            len(src_all) + a, len(tgt_all) + c))
+        elif ss or ts:
+            seq.append((ss, ts, False, len(src_all), len(tgt_all)))
+        src_all.extend(ss)
+        tgt_all.extend(ts)
+    ns = [trlib.norm_nums(x) for x in src_all]
+    nt = [trlib.norm_nums(x) for x in tgt_all]
 
-    one = [len(s) == 1 and len(t) == 1 and ok for s, t, ok in seq]
+    def alone(nums, i):
+        return all(nums[k] != nums[i]
+                   for k in range(max(0, i - ANCHOR_WINDOW),
+                                  min(len(nums), i + ANCHOR_WINDOW + 1))
+                   if k != i)
+
+    one = [len(s) == 1 and len(t) == 1 and ok for s, t, ok, _i, _j in seq]
+    anchored = [one[k] and bool(ns[i]) and ns[i] == nt[j]
+                and MARK not in s[0] and MARK not in t[0]
+                and _length_ok(s[0], t[0], ratio)
+                and alone(ns, i) and alone(nt, j)
+                for k, (s, t, _ok, i, j) in enumerate(seq)]
+    why = [_judge(s[0], t[0], ratio) if one[k] else "not one-to-one"
+           for k, (s, t, _ok, _i, _j) in enumerate(seq)]
+    # A neighbour whose numbers or length disagree is a sign that the two
+    # documents part company there, whatever its shape.
+    sound = [one[k] and why[k] not in ("numbers differ", "length")
+             for k in range(len(seq))]
     kept, rejected = [], []
-    for k, (s, t, _ok) in enumerate(seq):
+    for k, (s, t, _ok, _i, _j) in enumerate(seq):
         if not one[k]:
             if s and t:
-                rejected.append((" ".join(s), " ".join(t), "not one-to-one"))
-            continue
-        structural = ((k == 0 or one[k - 1])
-                      and (k == len(seq) - 1 or one[k + 1]))
-        why = _judge(s[0], t[0], ratio, structural)
-        if why:
-            rejected.append((s[0], t[0], why))
+                rejected.append((" ".join(s), " ".join(t), why[k]))
+        elif why[k]:
+            rejected.append((s[0], t[0], why[k]))
+        elif anchored[k] or (0 < k < len(seq) - 1
+                             and anchored[k - 1] and anchored[k + 1]):
+            kept.append((s[0], t[0], True))
+        elif (k == 0 or sound[k - 1]) and (k == len(seq) - 1 or sound[k + 1]):
+            kept.append((s[0], t[0], False))
         else:
-            kept.append((s[0], t[0]))
+            rejected.append((s[0], t[0], "no anchor"))
     return kept, rejected
 
 
@@ -527,11 +615,16 @@ def open_store():
     db = sqlite3.connect(store_path(), timeout=60)
     db.execute("""CREATE TABLE IF NOT EXISTS pairs(
         direction TEXT, doc TEXT, src TEXT, src_norm TEXT, tgt TEXT,
-        how TEXT, reusable INTEGER, variant TEXT NOT NULL DEFAULT '')""")
+        how TEXT, reusable INTEGER, variant TEXT NOT NULL DEFAULT '',
+        offered TEXT NOT NULL DEFAULT '')""")
     if "variant" not in _columns(db, "pairs"):
         # A store written before variants. Every German file in it was named
         # without one, and a German suffix without a variant is Germany.
         db.execute("ALTER TABLE pairs ADD COLUMN variant TEXT NOT NULL DEFAULT ''")
+    if "offered" not in _columns(db, "pairs"):
+        # A store written before tags: every pair in it that may not be
+        # reused was read by OCR, and kept() says so.
+        db.execute("ALTER TABLE pairs ADD COLUMN offered TEXT NOT NULL DEFAULT ''")
     db.execute("CREATE INDEX IF NOT EXISTS pairs_src ON pairs(direction, src_norm)")
     db.execute("""CREATE TABLE IF NOT EXISTS docs(
         direction TEXT, doc TEXT, signature TEXT, kept INTEGER,
@@ -560,30 +653,43 @@ def reuse_direction(direction, variant):
         else direction
 
 
-def kept(db, direction=None):
+def kept(db, direction=None, offered=False):
     """(reuse direction, doc, src, src_norm, tgt, how, reusable) for each kept
-    pair, in document order. Given a direction, only the pairs stored for its
+    pair, in document order -- and with offered set, an eighth field: the tags
+    it is offered under. Given a direction, only the pairs stored for its
     language pair -- in every variant, so a caller wanting one variant
-    compares the first field. Reads a store from before variants as Germany's.
+    compares the first field. Reads a store from before variants as
+    Germany's, and one from before tags as offered for OCR alone.
     """
-    variant = "variant" if "variant" in _columns(db, "pairs") else "''"
-    sql = (f"SELECT direction, doc, src, src_norm, tgt, how, reusable, {variant} "
-           f"FROM pairs")
+    cols = _columns(db, "pairs")
+    variant = "variant" if "variant" in cols else "''"
+    tags = "offered" if "offered" in cols else "''"
+    sql = (f"SELECT direction, doc, src, src_norm, tgt, how, reusable, {variant}, "
+           f"{tags} FROM pairs")
     args = ()
     if direction:
         s, t = trlib.split_direction(direction)
         sql, args = sql + " WHERE direction = ?", (f"{s}-{trlib.base_lang(t)}",)
-    for d, doc, src, src_norm, tgt, how, reusable, var in db.execute(
+    for d, doc, src, src_norm, tgt, how, reusable, var, why in db.execute(
             sql + " ORDER BY doc, rowid", args):
-        yield reuse_direction(d, var), doc, src, src_norm, tgt, how, reusable
+        row = (reuse_direction(d, var), doc, src, src_norm, tgt, how, reusable)
+        if offered:
+            row += (tuple(why.split(",")) if why else () if reusable else (OCR,),)
+        yield row
 
 
 # ------------------------------------------------------------------- reuse
 
 # One kept pair, as reuse sees it: the direction it is reused in, its
-# document, the translation, whether that was read without OCR, and the date
-# the translation file records.
-Row = collections.namedtuple("Row", "direction doc tgt reusable date date_from")
+# document, the translation, whether it may be reused, the date the
+# translation file records, and the tags it is offered under when it may not.
+Row = collections.namedtuple(
+    "Row", "direction doc tgt reusable date date_from offered", defaults=((),))
+
+# Why a pair is offered rather than reused, each written as a tag beside it in
+# the draft: its document was read by OCR; it was rejoined at a line-end
+# hyphen that may have been the word's own; nothing confirms its alignment.
+OCR, HYPHENATION, UNCONFIRMED = "OCR", "hyphenation", "unconfirmed"
 
 OPTIONS_MARK = "REF_OPTIONS"
 OPTIONS_OPEN, OPTIONS_CLOSE = "[[", "]]"
@@ -592,39 +698,54 @@ OPTIONS_OPEN, OPTIONS_CLOSE = "[[", "]]"
 def load_references():
     """{language pair: {normalised source: [Row]}}: every kept pair, for
     resolve() to decide what each sentence gets. Reads a store from before
-    dates, whose documents then have none."""
+    dates, whose documents then have none.
+
+    A document aligned under older rules than ALIGN_VERSION contributes
+    nothing until tr-ref aligns it again, and a line on stderr says so."""
     if not os.path.exists(store_path()):
         return {}
     db = sqlite3.connect(store_path(), timeout=60)
-    dates = {}
-    if {"date", "date_from"} <= _columns(db, "docs"):
-        dates = {(d, doc): (date, date_from) for d, doc, date, date_from in
-                 db.execute("SELECT direction, doc, date, date_from FROM docs")}
+    dated = {"date", "date_from"} <= _columns(db, "docs")
+    docs = {}
+    for row in db.execute("SELECT direction, doc, signature"
+                          + (", date, date_from" if dated else "") + " FROM docs"):
+        docs[row[0], row[1]] = (current(row[2]),) + (tuple(row[3:]) if dated else ("", ""))
     out = collections.defaultdict(lambda: collections.defaultdict(list))
-    for d, doc, _src, src_norm, tgt, _how, reusable in kept(db):
+    stale = set()
+    for d, doc, _src, src_norm, tgt, _how, reusable, tags in kept(db, offered=True):
         s, t = trlib.split_direction(d)
         pair = f"{s}-{trlib.base_lang(t)}"
-        date, date_from = dates.get((pair, doc), ("", ""))
+        ok, date, date_from = docs.get((pair, doc), (False, "", ""))
+        if not ok:
+            stale.add((pair, doc))
+            continue
         out[pair][src_norm].append(
-            Row(d, doc, tgt, reusable, date, date_from or "no date"))
+            Row(d, doc, tgt, reusable, date, date_from or "no date", tags))
     db.close()
+    if stale:
+        sys.stderr.write(f"  {len(stale)} reference document(s) were aligned "
+                         f"under older rules and are not reused until tr-ref "
+                         f"runs again\n")
     return {pair: dict(sources) for pair, sources in out.items()}
 
 
 def rendering_key(text):
-    """What renderings share when they differ only in case and punctuation.
+    """What renderings share when they differ only in punctuation.
 
-    A mark between two digits is part of the number rather than punctuation,
-    so 5.1 and 51 stay two renderings. lower(), not casefold(): casefold
-    writes ß as ss, which is spelling -- and the very difference between
-    Germany and Switzerland.
+    Case is kept: Sie and sie are two words in German, the polite you and
+    they. A mark between two digits is part of the number, so 5.1 and 51 stay
+    two, and a hyphen before a digit with no word before it is a minus sign,
+    so -250,00 and 250,00 stay two. % and § are words written as signs.
     """
-    t = norm(text).lower()
+    t = norm(text)
     out = []
     for i, c in enumerate(t):
-        in_number = 0 < i < len(t) - 1 and t[i - 1].isdigit() and t[i + 1].isdigit()
+        digit_before = i > 0 and t[i - 1].isdigit()
+        digit_after = i < len(t) - 1 and t[i + 1].isdigit()
+        sign = c == "-" and digit_after and not (i > 0 and t[i - 1].isalnum())
         out.append(" " if unicodedata.category(c).startswith("P")
-                   and not in_number else c)
+                   and not (digit_before and digit_after) and not sign
+                   and c not in "%‰§" else c)
     return " ".join("".join(out).split())
 
 
@@ -639,12 +760,15 @@ def _ranked(items, count, date, name, first=lambda _item: 0):
 
 class Rendering:
     """One way the references render a sentence: every spelling of it that
-    differs only in case and punctuation, with what orders it."""
+    differs only in punctuation, with what orders it."""
 
     def __init__(self, rows):
         clean = [r for r in rows if r.reusable]
         self.rows = rows
-        self.ocr = not clean                   # every copy of it read by OCR
+        # Why it is offered rather than reused, when no copy of it may be
+        # reused. A row that may not be and names no tag is OCR's.
+        self.offered = [] if clean else sorted(
+            {tag for r in rows for tag in (r.offered or (OCR,))})
         self.docs = {r.doc for r in rows}
         newest = max(rows, key=lambda r: r.date)
         self.date, self.date_from, self.date_doc = \
@@ -678,8 +802,9 @@ def resolve(rows, direction, source, gloss=None):
     renderings written into it; ranked every rendering considered, in order.
     The project's own variant's renderings are considered when there are any,
     another variant's only when there are none. One rendering is reused,
-    unless every copy of it was read by OCR or it is another variant's;
-    anything else is offered, at most two at a time.
+    unless no copy of it may be -- read by OCR, rejoined at an uncertain
+    line-end hyphen, or lined up with nothing to confirm it -- or it is
+    another variant's; anything else is offered, at most two at a time.
     """
     own = [r for r in rows if r.direction == direction]
     pool = own or rows
@@ -704,11 +829,11 @@ def resolve(rows, direction, source, gloss=None):
                      count=lambda g: len(g.docs), date=lambda g: g.date,
                      name=lambda g: g.text)
 
-    if own and len(ranked) == 1 and not ranked[0].ocr:
+    if own and len(ranked) == 1 and not ranked[0].offered:
         return ranked[0].text, ranked[:1], ranked
     for g in ranked:
         g.tags = ([] if own else [_variant_label(v) for v in g.variants]) \
-            + (["OCR"] if g.ocr else [])
+            + g.offered
     shown = ranked[:2]
     text = OPTIONS_MARK + " " + " | ".join(
         f"{OPTIONS_OPEN}{g.text}{OPTIONS_CLOSE}"

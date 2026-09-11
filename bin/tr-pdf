@@ -45,6 +45,31 @@ base="${rel//\//__}"
 pdf="$OCRDIR/$base.ocr.pdf"
 txt="$OCRDIR/$base.txt"
 
+# The cache belongs to a file's contents, not to its path. A PDF replaced in
+# place kept the text layer of the file it replaced, so a corrected reference
+# translation went on supplying the sentences it corrected, even after
+# tr-ref --rebuild. The layer made from the old file is set aside, in case it
+# was corrected by hand, and the OCR'd PDF made from it is removed. A layer
+# from before hashes were recorded is taken as this file's, unless the file
+# is newer than it.
+sum="$OCRDIR/$base.sha256"
+now="$(sha256sum < "$IN" | cut -d' ' -f1)"
+was="$now"
+if [[ -f "$sum" ]]; then
+  read -r was < "$sum" || true
+elif [[ -f "$txt" && "$IN" -nt "$txt" ]]; then
+  was=""
+fi
+if [[ "$was" != "$now" ]]; then
+  if [[ -f "$txt" ]]; then
+    old="$txt.replaced-$(date +%Y%m%d-%H%M%S)"
+    mv -f "$txt" "$old"
+    echo "  the PDF has changed since its text layer was made; reading it again"
+    echo "    (previous layer kept as $(basename "$old"))"
+  fi
+  rm -f "$pdf"
+fi
+
 # A cached layer made without confidence marking is not a cache hit.
 #
 # tr-inventory --count --with-ocr once wrote these with plain pdftotext, so a
@@ -122,6 +147,7 @@ else
   echo "  text layer cached: $(basename "$txt")"
 fi
 
+printf '%s\n' "$now" > "$sum"
 wc_w=$(wc -w < "$txt")
 echo "  text layer: $txt  ($wc_w words)"
 
