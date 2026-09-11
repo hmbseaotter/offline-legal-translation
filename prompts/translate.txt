@@ -18,6 +18,8 @@ Rules:
 {end}
 {when TGT=de}
 - Translate institution names into {TGT}. They are not identifiers.
+{end}
+{when TGT=de VARIANT=DE}
 - Convert dates, amounts and times to {TGT} convention without changing
   the value: 5. März 2024 — the day takes a period because it is an
   ordinal, the month name is capitalised; decimal comma and thousands
@@ -25,6 +27,22 @@ Rules:
   Use one date format throughout; never switch mid-document.
 - Write German as used in Germany: ß wherever standard German spelling
   requires it, and German legal terminology rather than Austrian or Swiss.
+{end}
+{when TGT=de VARIANT=CH}
+- Convert dates, amounts and times to Swiss convention without changing
+  the value. Dates: 5. März 2024 — the day takes a period because it is
+  an ordinal, the month name is capitalised. Numbers: decimal comma
+  (3,5); from five digits, thousands separated by a space (12 450), four
+  digits written together (1250). Amounts of money: the currency code
+  first and a decimal point (CHF 1250.50, EUR 12 450.00); a whole number
+  of francs is written Fr. 20.–. Times: 24-hour clock with a period and no
+  leading zero (9.05 Uhr, 14.30 Uhr), never a.m./p.m.
+  Use one date format throughout; never switch mid-document.
+- Write German as used in Switzerland: ss, never ß, except in names and
+  addresses reproduced from the source, and Swiss legal terminology rather
+  than German or Austrian.
+{end}
+{when TGT=de}
 - A heading or a label is translated as itself and nothing more: "Date:"
   becomes "Datum:". Never add a date, amount, name or sentence the source
   does not have.

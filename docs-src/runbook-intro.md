@@ -61,12 +61,13 @@ for every segment. Set the pair before step 3: triage keeps only the files
 in `TR_SRC`, and counts only those toward the volume.
 
 **German has variants.** `TR_TGT=de` is German as written in Germany, and
-`de-DE` means the same. `de-AT` and `de-CH` are recognised — `tr-ref` files
-references in them and `tr-terms --reference` reads them — but `tr-run`
-refuses to draft into them until their conventions are built: Swiss German
-writes ss for ß and spells amounts and times its own way, and a draft made
-by Germany's rules would read as finished. `TR_SRC` never takes a variant;
-a Swiss German source is `de`.
+`de-DE` means the same. `TR_TGT=de-CH` drafts Swiss German by the Swiss
+Federal Chancellery's rules: `12 450,00` with a non-breaking space,
+`CHF 1250.50` and `Fr. 20.–` for money, `14.30`, and ss for ß — except in a
+word the source has too, such as a name. `de-AT` is recognised — `tr-ref`
+files references in it and `tr-terms --reference` reads them — but `tr-run`
+refuses to draft into it until its conventions are settled. `TR_SRC` never
+takes a variant; a Swiss German source is `de`.
 
 **2. Copy the client's drop into `source/`, preserving its folder
 structure.** Filenames and the shape of the tree are reproduced in
@@ -87,7 +88,7 @@ in it can reach a deliverable word for word. Where the references render a
 sentence more than one way, the draft carries the choice instead of a model
 draft:
 
-    REF_OPTIONS «Der Mieter kann kündigen.» | «Der Mieter darf kündigen.»
+    REF_OPTIONS [[Der Mieter kann kündigen.]] | [[Der Mieter darf kündigen.]]
 
 The rendering found in the most documents comes first, then the newest by
 the date the file itself records, and a pinned glossary term puts the
@@ -108,7 +109,8 @@ German takes a variant after a hyphen — `_German-CH`, `_German-AT`, and
 a Swiss translation makes two pairs. A German translation is reused only in
 a project whose `TR_TGT` is its variant. One in another variant is never
 reused; where the project's own variant has no reference for a sentence, it
-is offered as `REF_OPTIONS «…» (de-CH)`.
+is offered as `REF_OPTIONS [[…]] (de-CH)` — and, in a Swiss project, spelled
+with ss.
 
 **3. Classify every file by source language.**
 

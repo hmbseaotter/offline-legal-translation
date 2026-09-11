@@ -101,7 +101,7 @@ up sentence by sentence — by length, with the numbers both sides share as
 anchors — and keeps only one-to-one pairs whose numbers agree. An identical
 source sentence then takes the translator's rendering instead of a draft.
 Where the references render a sentence more than one way, the draft offers
-the renderings as `REF_OPTIONS «…» | «…»`, the one most documents use
+the renderings as `REF_OPTIONS [[…]] | [[…]]`, the one most documents use
 first, and the translator keeps one. A translation read by OCR is offered
 the same way and never reused on its own, because a misreading would pass
 straight into a deliverable.

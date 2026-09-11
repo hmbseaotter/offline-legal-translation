@@ -29,7 +29,7 @@ ENV_VARS = [
     ('TR_MODEL', '(by language pair)',
      'Overrides the model chosen for the pair: gams3:q8 for sl↔en, eurollm9b-2512:q8 for en↔de, none for sl↔de. Set it in a project\'s project.conf, not in ~/.bashrc'),
     ('TR_SRC / TR_TGT', 'sl / en',
-     'Per-project, in project.conf. Any two of sl, en, de. TR_TGT may name a German variant: de-DE (the same as de), de-AT or de-CH. tr-ref and tr-terms read the last two; drafting into them is refused until their conventions are built'),
+     'Per-project, in project.conf. Any two of sl, en, de. TR_TGT may name a German variant: de-DE (the same as de); de-CH, drafted by the Swiss Federal Chancellery\'s rules; or de-AT, which tr-ref and tr-terms read but drafting refuses until its conventions are settled'),
     ('TR_SUFFIX', '(empty)',
      'Per-project, in project.conf. Set if the client requires it'),
     ('TR_NUM_CTX', '8192',

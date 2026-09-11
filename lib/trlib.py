@@ -267,12 +267,13 @@ NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
 # would hold back the whole drop.
 VARIANTS = {"de": ("DE", "AT", "CH")}      # the first is what the bare code means
 
-# The variants a draft can be made in, beyond each language's first. None
-# yet: the prompt, the conversion of dates, amounts and times, and the
-# spelling all follow Germany, and a Swiss draft made by those rules would
-# read as finished. References in every variant are filed by tr-ref and read
-# by tr-terms already.
-VARIANTS_DRAFTED = set()
+# The variants a draft can be made in, beyond each language's first. Swiss
+# German has prompt rules, conversions and a spelling pass of its own, from
+# the Swiss Federal Chancellery's Schreibweisungen: see localize() and
+# finish_draft(). Austrian German has none settled, and a draft made by
+# Germany's rules would read as finished, so it is refused. References in
+# every variant are filed by tr-ref and read by tr-terms regardless.
+VARIANTS_DRAFTED = {"de-CH"}
 
 _LANG_RE = re.compile(r"([A-Za-z]{2})(?:[-_]([A-Za-z]{2}))?")
 
@@ -332,12 +333,12 @@ def translation_pair(src=None, tgt=None):
     """project_pair(), refusing a target no draft can be made in yet."""
     s, t = project_pair(src, tgt)
     if t != base_lang(t) and t not in VARIANTS_DRAFTED:
-        sys.exit(f"TR_TGT is {t}, and drafting into it is not built yet: the "
-                 f"prompt, the conversion of dates, amounts and times, and the "
-                 f"spelling all follow Germany, and a draft made by those rules "
-                 f"would read as finished.\n"
+        sys.exit(f"TR_TGT is {t}, and drafting into it is not built yet: no "
+                 f"prompt rules or conversions of dates, amounts and times "
+                 f"exist for it, and a draft made by Germany's rules would read "
+                 f"as finished.\n"
                  f"tr-ref and tr-terms --reference already work for {t}. "
-                 f"For Germany, set TR_TGT=de.")
+                 f"For Germany, set TR_TGT=de; for Switzerland, TR_TGT=de-CH.")
     return s, t
 
 
@@ -910,6 +911,94 @@ def _en_to_de(s):
     return _en_number_to_sl(s)
 
 
+# Switzerland writes German by the Swiss Federal Chancellery's Schreibweisungen
+# (2015 edition). Where they differ from Germany in a way a deliverable shows:
+#
+#   numbers   a decimal comma, 3,5; from five digits the thousands separated
+#             by a non-breaking space, 12 450; four digits written together,
+#             1250. The apostrophe, 12'450, is no longer recommended (§512)
+#   money     a decimal point and the currency code first: CHF 1250.50,
+#             EUR 12 450.00; a whole number of francs is Fr. 20.– (§540-546)
+#   times     a period and no leading zero: 9.05, 14.30 (§533)
+#   spelling  ss, never ß
+#
+# Dates are written as in Germany, 2. September 2006 (§535).
+#
+# A number is money only beside a currency, the translator's rule. A
+# converter sees the number and not the column it stands in, so a bare
+# 12,450.00 becomes 12 450,00, which cannot be misread even where it was
+# money. As in Germany, a time on its own gets no "Uhr".
+
+NBSP = "\u00a0"
+_CURRENCY = r"CHF|Fr\.|EUR|USD|GBP|SIT|€|\$|£"
+_CH_AMOUNT = re.compile(rf"^\s*(?:(?P<pre>{_CURRENCY})\s*(?P<a>[\d.,]+)"
+                        rf"|(?P<b>[\d.,]+)\s*(?P<post>{_CURRENCY}))\s*$")
+
+
+def _swiss_number(s, money):
+    """An English-format number in Swiss form, or None if s is not one:
+    12,450.00 as 12 450,00, or 12 450.00 when it is money; 1,250 as 1250."""
+    if not _EN_DECIMAL.fullmatch(s):
+        return None
+    integer, _, fraction = s.replace(",", "").partition(".")
+    if len(integer) > 4:
+        integer = _regroup(integer, NBSP)
+    return integer + (("." if money else ",") + fraction if fraction else "")
+
+
+def _en_to_ch(s):
+    """English whole-segment values in Swiss form; the rules are above."""
+    if _DATE_EN.match(s):
+        return _en_to_de(s)                   # written as in Germany
+    m = _TIME_AMPM.match(s)
+    if m:
+        h, mi, ap = int(m.group(1)), m.group(2), m.group(3).lower()
+        if 1 <= h <= 12 and 0 <= int(mi) <= 59:
+            h24 = (0 if h == 12 else h) if ap == "a" else (12 if h == 12 else h + 12)
+            return f"{h24}.{mi}"
+        return None
+    m = _TIME_HM.match(s)
+    if m:
+        h, mi = int(m.group(1)), m.group(2)
+        if 0 <= h <= 23 and 0 <= int(mi) <= 59:
+            return f"{h}.{mi}"
+        return None
+    m = _CH_AMOUNT.match(s)
+    if m:
+        currency = m.group("pre") or m.group("post")
+        number = _swiss_number(m.group("a") or m.group("b"), money=True)
+        if number is None:
+            return None
+        integer, _, fraction = number.partition(".")
+        if currency in ("CHF", "Fr.") and not fraction.strip("0"):
+            return f"Fr. {integer}.–"
+        return f"{currency} {number}"
+    return _swiss_number(s, money=False)
+
+
+_SHARP_S = re.compile(r"\w*[ßẞ]\w*")
+
+
+def swiss_spelling(source, text):
+    """text with ß written ss and ẞ written SS, the Swiss way -- except in a
+    word the source has too.
+
+    A name or an address is reproduced verbatim, and some carry ß: where the
+    source says Strauß, so does the draft, while a word the draft translated
+    is converted.
+    """
+    keep = set(_SHARP_S.findall(source or ""))
+
+    def swap(m):
+        word = m.group(0)
+        if word in keep:
+            return word
+        upper = word.replace("ß", "").isupper()
+        return word.replace("ẞ", "SS").replace("ß", "SS" if upper else "ss")
+
+    return _SHARP_S.sub(swap, text or "")
+
+
 def localize(text, src_lang, tgt_lang):
     """Convert a whole-segment date, time or amount to the target locale.
 
@@ -918,9 +1007,10 @@ def localize(text, src_lang, tgt_lang):
     Neither "5 March 2024" nor "5. Marec 2024" is correct in either language.
 
     Returns the text unchanged when nothing applies, and for every pair other
-    than sl<->en and en->de. German writes "5. März 2024" and keeps the
-    24-hour clock, so it has its own rules; other German pairs are left alone
-    until someone needs them, because applying another language's
+    than sl<->en, en->de and en->de-CH. German writes "5. März 2024" and keeps
+    the 24-hour clock, so it has its own rules, and Swiss German differs from
+    it again in numbers, money and times (see above); other German pairs are
+    left alone until someone needs them, because applying another language's
     conventions silently would be worse than doing nothing.
 
     Deliberately conservative in two places. "14:30" is read as a time,
@@ -939,6 +1029,8 @@ def localize(text, src_lang, tgt_lang):
         return _en_to_sl(s) or text
     if src_lang == "en" and tgt_lang == "de":
         return _en_to_de(s) or text
+    if src_lang == "en" and tgt_lang == "de-CH":
+        return _en_to_ch(s) or text
     return text
 
 
@@ -1009,9 +1101,22 @@ def _to24(m):
     return f"{h:02d}:{mm}"
 
 
+# Digit groups written apart are one number: 12 450 with a plain or a
+# non-breaking space, and 12'450, which older Swiss documents use. A whole
+# franc amount, Fr. 20.–, is 20.00. Without these, a Swiss draft that carried
+# 12,450.00 over correctly as 12 450.00 would raise a NUM finding and a firmer
+# retry. The look-arounds keep a street number beside a postcode apart:
+# "Bahnhofstrasse 12 8001" has no group of exactly three digits after the 12.
+_GROUPED = re.compile(
+    r"(?<![\d.,'’])(\d{1,3})((?:[ \u00a0\u202f\u2009'’]\d{3})+)(?!\d)")
+_WHOLE_AMOUNT = re.compile(r"(\d)[.,][–-](?!\d)")
+
+
 def canon_locale(s):
     """Fold locale spellings onto one form before numbers are compared."""
     s = s or ""
+    s = _WHOLE_AMOUNT.sub(r"\1.00", s)               # Fr. 20.– -> 20.00
+    s = _GROUPED.sub(lambda m: m.group(1) + re.sub(r"\D", "", m.group(2)), s)
     s = _AMPM_RE.sub(_to24, s)                       # 2:30 p.m. -> 14:30
     return _MONTH_RE.sub(                            # March 5 -> 3 5
         lambda m: _MONTH_NUM[(m.group(1) or m.group(2)).lower()], s)
@@ -1054,7 +1159,13 @@ def load_glossary():
             cols = ln.rstrip("\n").split("\t")
             if len(cols) >= 2 and cols[0].strip() and cols[1].strip():
                 merged[cols[0].strip()] = cols[1].strip()
-    return sorted(merged.items())
+    terms = sorted(merged.items())
+    # A Swiss project's terms in Swiss spelling, so the prompt shows the model
+    # ss and tr-lint checks for it. A term's own source form stands in for the
+    # source sentence: an entry with ß on both sides, such as a name, keeps it.
+    if _env_target() == "de-CH":
+        terms = [(term, swiss_spelling(term, target)) for term, target in terms]
+    return terms
 
 def glossary_block(text, gloss, limit=40):
     """Only inject terms that actually occur — keeps the prompt small.
@@ -1153,8 +1264,10 @@ LANG = {"sl": "Slovene", "en": "English", "de": "German"}
 #     - Convert dates ... 5. März 2024 ...
 #     {end}
 #
-# Conditions test SRC, TGT or PAIR against comma-separated values, several
-# on one line must all hold, and the marker lines themselves are never sent.
+# Conditions test SRC, TGT, VARIANT or PAIR against comma-separated values,
+# several on one line must all hold, and the marker lines themselves are
+# never sent. TGT and PAIR name the language, so a rule for de reaches de-CH
+# too; VARIANT is DE for Germany, plain de included, or CH, or AT.
 # One file for every pair, rather than a file per pair, because the rules
 # that do not vary -- OCR_ILLEGIBLE, what is verbatim, the register -- would
 # otherwise be written out several times and drift, which is how the second
@@ -1168,7 +1281,10 @@ _END_RE = re.compile(r"^\{end\}$")
 
 def _select_blocks(text, src_lang, tgt_lang, where):
     """The prompt text that applies to this pair, markers removed."""
-    facts = {"SRC": src_lang, "TGT": tgt_lang, "PAIR": f"{src_lang}-{tgt_lang}"}
+    lang = base_lang(tgt_lang)
+    variant = tgt_lang.partition("-")[2] or VARIANTS.get(lang, ("",))[0]
+    facts = {"SRC": src_lang, "TGT": lang, "VARIANT": variant,
+             "PAIR": f"{src_lang}-{lang}"}
     out, keep, opened = [], True, 0
     for n, line in enumerate(text.splitlines(keepends=True), 1):
         m = _WHEN_RE.match(line.strip())
@@ -1181,7 +1297,8 @@ def _select_blocks(text, src_lang, tgt_lang, where):
                 k, _, vals = cond.partition("=")
                 if k not in facts or not vals:
                     sys.exit(f"{where}:{n}: cannot read {cond!r} - write "
-                             f"SRC=, TGT= or PAIR=, e.g. {{when TGT=de}}")
+                             f"SRC=, TGT=, VARIANT= or PAIR=, e.g. "
+                             f"{{when TGT=de VARIANT=CH}}")
                 keep = keep and facts[k] in vals.split(",")
             continue
         if _END_RE.match(line.strip()):
@@ -1218,7 +1335,7 @@ def _prompt_template(src_lang, tgt_lang):
             where, base = tpl, open(tpl, encoding="utf-8").read()
     t = _select_blocks(base, src_lang, tgt_lang, where) \
         .replace("{SRC}", LANG.get(src_lang, src_lang)) \
-        .replace("{TGT}", LANG.get(tgt_lang, tgt_lang))
+        .replace("{TGT}", LANG.get(base_lang(tgt_lang), tgt_lang))
     _TEMPLATES[k] = t
     return t
 
@@ -1299,9 +1416,11 @@ PROMPT_VERSION = prompt_version(os.environ.get("TR_SRC", "sl"), _env_target())
 
 # A Slovene amount: optional period-grouped thousands, comma decimal, one or
 # two decimal digits. The lookarounds keep it from starting or ending inside a
-# longer run of digits and separators.
-_SL_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:\.\d{3})*|\d+),(\d{1,2})(?![\d,.])")
-_EN_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)\.(\d{1,2})(?![\d,.])")
+# longer run of digits and separators. A full stop after it ends the sentence,
+# not the number, unless a digit follows: "12.450,00." is an amount, while
+# "5.10.2024" is not one followed by more of it.
+_SL_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:\.\d{3})*|\d+),(\d{1,2})(?![\d,]|\.\d)")
+_EN_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)\.(\d{1,2})(?![\d,]|\.\d)")
 _COMMA_DECIMAL = {"sl", "de"}
 _POINT_DECIMAL = {"en"}
 
@@ -1346,13 +1465,15 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
 
     KNOWN LIMIT, FROM ENGLISH ONLY. English writes both "1.50" as an amount
     and "5.10" as a section reference, and nothing in the string
-    distinguishes them, so an en->sl or en->de run turns "Section 5.10" into
-    "Section 5,10". The comma-to-point directions have no such ambiguity,
+    distinguishes them, so an en->sl, en->de or en->de-CH run turns
+    "Section 5.10" into "Section 5,10", at the end of a sentence as well. The comma-to-point directions have no such ambiguity,
     because a Slovene or German amount needs a comma decimal and a section
     reference never has one.
     """
     if not src or not tgt:
         return tgt
+    if src_lang in _POINT_DECIMAL and tgt_lang == "de-CH":
+        return _fix_swiss_numbers(src, tgt)
     if src_lang in _COMMA_DECIMAL and tgt_lang in _POINT_DECIMAL:
         pat, thou_out, dec_out = _SL_AMOUNT, ",", "."
         strip = "."
@@ -1372,6 +1493,58 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
     for old in sorted(subs, key=len, reverse=True):
         if old in tgt:
             tgt = tgt.replace(old, subs[old])
+    return tgt
+
+
+_CURRENCY_BEFORE = re.compile(rf"(?:{_CURRENCY})\s*$")
+_CURRENCY_AFTER = re.compile(rf"\s*(?:{_CURRENCY})")
+
+
+def _fix_swiss_numbers(src, tgt):
+    """fix_numeric_format() for English into Swiss German.
+
+    Driven from the source the same way, with the same known limit. Whether a
+    number is money is read in the source, where its currency stands beside
+    it: CHF 12,450.00 is rewritten 12 450.00, and a bare 3.25 becomes 3,25.
+    The currency stays where the model put it; the prompt asks for it first,
+    and moving words within a sentence is not arithmetic.
+    """
+    subs = {}
+    for m in _EN_AMOUNT.finditer(src):
+        money = bool(_CURRENCY_BEFORE.search(src, 0, m.start())
+                     or _CURRENCY_AFTER.match(src, m.end()))
+        swiss = _swiss_number(m.group(0), money)
+        if swiss and swiss != m.group(0):
+            subs[m.group(0)] = swiss
+    for old in sorted(subs, key=len, reverse=True):
+        if old in tgt:
+            tgt = tgt.replace(old, subs[old])
+    return tgt
+
+
+_SPACED_GROUPS = re.compile(r"(?<![\d.,'’\u00a0])(\d{1,3})((?: \d{3})+)(?!\d)")
+
+
+def _swiss_spacing(text):
+    """Non-breaking spaces in a number of five digits or more whose groups the
+    model separated with plain ones, so that no line break splits it. A
+    spaced four-digit number is left alone: joining it would be right if it
+    is one number and wrong if it is two."""
+    def nbsp(m):
+        if len(m.group(1)) + len(m.group(2).replace(" ", "")) < 5:
+            return m.group(0)
+        return m.group(1) + m.group(2).replace(" ", NBSP)
+    return _SPACED_GROUPS.sub(nbsp, text)
+
+
+def finish_draft(src, tgt, src_lang, tgt_lang):
+    """A model reply made ready to store: its number format fixed and, in
+    Swiss German, its digit groups held together and ß written ss. Every
+    draft passes through here before it enters the memory, so the memory
+    holds what the deliverable shows."""
+    tgt = fix_numeric_format(src, tgt, src_lang, tgt_lang)
+    if tgt and tgt_lang == "de-CH":
+        tgt = swiss_spelling(src, _swiss_spacing(tgt))
     return tgt
 
 
@@ -1516,7 +1689,7 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
                 if (fallback is not None and len(added_numbers(text, out))
                         > len(added_numbers(text, fallback))):
                     out = fallback
-                out = fix_numeric_format(text, out, src_lang, tgt_lang)
+                out = finish_draft(text, out, src_lang, tgt_lang)
                 tm_put(text, out, f"{src_lang}-{tgt_lang}", gb)
                 return out
             last = "empty response"
@@ -1524,7 +1697,7 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
             last = e
             time.sleep(3 * (attempt + 1))
     if fallback is not None:
-        out = fix_numeric_format(text, fallback, src_lang, tgt_lang)
+        out = finish_draft(text, fallback, src_lang, tgt_lang)
         tm_put(text, out, f"{src_lang}-{tgt_lang}", gb)
         return out
     print(f"  ! translation failed after {retries} tries: {last}", file=sys.stderr)
@@ -1661,7 +1834,7 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
                     report(done, len(texts), texts[i])
             return
         for i, tr in zip(idxs, got):
-            tr = fix_numeric_format(texts[i], tr, src_lang, tgt_lang)
+            tr = finish_draft(texts[i], tr, src_lang, tgt_lang)
             out[i] = tr
             # Keyed on the terms that apply to THIS segment, matching the
             # single-segment path -- not on the block the batch was sent

@@ -63,7 +63,10 @@ Choosing between two human renderings is the translator's decision, so where
 references disagree the draft carries the choice instead of a model draft, as
 one token a search finds, like OCR_ILLEGIBLE:
 
-    REF_OPTIONS «Der Mieter kann kündigen.» | «Der Mieter darf kündigen.»
+    REF_OPTIONS [[Der Mieter kann kündigen.]] | [[Der Mieter darf kündigen.]]
+
+Double square brackets rather than guillemets, because Swiss German writes its
+quotation marks «…» and a Swiss rendering would carry them inside the token.
 
 The rendering found in the most documents comes first -- counted once per
 document, so a clause one file repeats does not outvote two files -- and a tie
@@ -83,9 +86,11 @@ A German translation is reused only in a project writing its variant: a Swiss
 one where TR_TGT is de-CH, a Germany one where it is de. Renderings in two
 variants differ as a matter of course, so one is not a disagreement with the
 other. Where the project's own variant has no reference for a sentence, the
-other variant's renderings are offered, tagged with it -- «…» (de-CH) -- and
-never reused. The variant matters on the target side only; a German->English
-project reuses a pair whatever German its source is written in.
+other variant's renderings are offered, tagged with it -- [[…]] (de-CH) -- and
+never reused. Offered to a Swiss project, a Germany rendering is first spelled
+ss for ß, as a Swiss draft would be. The variant matters on the target side
+only; a German->English project reuses a pair whatever German its source is
+written in.
 """
 import collections
 import datetime
@@ -581,6 +586,7 @@ def kept(db, direction=None):
 Row = collections.namedtuple("Row", "direction doc tgt reusable date date_from")
 
 OPTIONS_MARK = "REF_OPTIONS"
+OPTIONS_OPEN, OPTIONS_CLOSE = "[[", "]]"
 
 
 def load_references():
@@ -676,8 +682,13 @@ def resolve(rows, direction, source, gloss=None):
     anything else is offered, at most two at a time.
     """
     own = [r for r in rows if r.direction == direction]
+    pool = own or rows
+    if not own and trlib.split_direction(direction)[1] == "de-CH":
+        # Another variant's renderings, offered to a Swiss project, in the
+        # spelling a Swiss draft would have.
+        pool = [r._replace(tgt=trlib.swiss_spelling(source, r.tgt)) for r in pool]
     groups = collections.defaultdict(list)
-    for r in own or rows:
+    for r in pool:
         groups[rendering_key(r.tgt)].append(r)
     renderings = [Rendering(g) for g in groups.values()]
 
@@ -700,6 +711,7 @@ def resolve(rows, direction, source, gloss=None):
             + (["OCR"] if g.ocr else [])
     shown = ranked[:2]
     text = OPTIONS_MARK + " " + " | ".join(
-        f"«{g.text}»" + (f" ({', '.join(g.tags)})" if g.tags else "")
+        f"{OPTIONS_OPEN}{g.text}{OPTIONS_CLOSE}"
+        + (f" ({', '.join(g.tags)})" if g.tags else "")
         for g in shown)
     return text, shown, ranked

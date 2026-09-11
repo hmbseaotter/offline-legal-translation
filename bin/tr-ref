@@ -45,7 +45,7 @@ WHAT HAPPENS NEXT
                         Where the references disagree -- or the only
                         rendering was read by OCR, or is in another German
                         variant -- the draft carries the choice instead:
-                            REF_OPTIONS «…» | «…»
+                            REF_OPTIONS [[…]] | [[…]]
                         Search the deliverables for REF_OPTIONS, keep one
                         rendering and delete the rest
   tr-terms --reference  proposes glossary entries from the references rather
@@ -225,7 +225,7 @@ def main():
                     tags = f" ({', '.join(g.tags)})" if g.tags else ""
                     when = (f"newest {g.date[:10]}, {g.date_from}, {g.date_doc}"
                             if g.date else "no date")
-                    print(f"    {'*' if g in shown else ' '} «{g.text}»{tags}\n"
+                    print(f"    {'*' if g in shown else ' '} {trref.OPTIONS_OPEN}{g.text}{trref.OPTIONS_CLOSE}{tags}\n"
                           f"        {len(g.docs)} document(s); {when}")
             print("\n  * written into the draft; the rest are listed here only")
         else:
