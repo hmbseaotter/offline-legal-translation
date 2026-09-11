@@ -2,7 +2,7 @@
 
 **Target:** `~/Claude_Stuff/cli_projects/translation-tools/`
 
-The kit is a git repository, distributed as a private repository on GitHub.
+The kit is a git repository, distributed as a public repository on GitHub.
 Clone it — do not unpack it from an archive. A copy extracted from a ZIP has
 no `.git`, and without that the hook that keeps client documents out of the
 repository cannot be installed at all.

@@ -718,14 +718,28 @@ SEC_PER_SEGMENT = {
 }
 
 
+# Which of those figures measures real work. EuroLLM's does not yet: short
+# invented segments, before the retries of aeaa8e3 and the longer Swiss
+# prompt, for a model whose cost is mostly generation and so grows with the
+# sentence. It is an estimate until a mean over real-length text, retries
+# included, replaces it.
+MEASURED = {"gams3:q8"}
+
+
 def sec_per_segment(model=None):
-    """(seconds, measured) for a model. Unmeasured falls back to the slowest
-    figure there is, and says so -- an estimate that errs long is a delay,
-    one that errs short is a mispriced job."""
+    """(seconds, basis) for a model, basis saying in a report's words what
+    the figure is: measured on real work, an estimate, or not this model's.
+    Unmeasured falls back to the slowest figure there is, and says so -- an
+    estimate that errs long is a delay, one that errs short is a mispriced
+    job."""
     m = MODEL if model is None else model
+    if m in MEASURED:
+        return SEC_PER_SEGMENT[m], f"measured for {m}"
     if m in SEC_PER_SEGMENT:
-        return SEC_PER_SEGMENT[m], True
-    return max(SEC_PER_SEGMENT.values()), False
+        return SEC_PER_SEGMENT[m], (f"an estimate for {m}, from short invented "
+                                    f"segments and before retries")
+    return max(SEC_PER_SEGMENT.values()), (f"NOT measured for {m or 'this pair'}, "
+                                           f"so the slowest figure there is")
 
 def path(*p):
     return os.path.join(require_root(), *p)

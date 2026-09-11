@@ -1,7 +1,7 @@
 """Language pairs: a German source is refused until language detection knows
 German and German->English has rules of its own; an unknown language, or a
 pair no model is chosen for, is refused before anything is drafted. Audit
-2026-09-10: H-9, M-15, L-4, L-5."""
+2026-09-10: H-9, M-15, L-4, L-5, M-17."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import os
@@ -55,6 +55,10 @@ class Pairs(unittest.TestCase):
             self.assertIn(("Zzzstreet", "Zzzstraße"), trlib.load_glossary("de"))
         finally:
             os.remove(path)
+
+    def test_eurollms_speed_is_labelled_an_estimate(self):
+        self.assertTrue(trlib.sec_per_segment("gams3:q8")[1].startswith("measured"))
+        self.assertTrue(trlib.sec_per_segment("eurollm9b-2512:q8")[1].startswith("an estimate"))
 
 
 if __name__ == "__main__":

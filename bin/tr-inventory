@@ -275,9 +275,10 @@ def main():
                     help="take the detector's verdict wherever it disagrees "
                          "with the recorded language, without asking")
     ap.add_argument("--with-ocr", action="store_true",
-                    help="with --count, run the real OCR pass on scanned PDFs "
-                         "instead of listing them as needing it. Slow, and "
-                         "cached so tr-pdf does not repeat it")
+                    help="with --count, make the text layer tr-pdf translates "
+                         "for every PDF -- OCR for a scan -- instead of listing "
+                         "scans as needing it. Slow, and cached so tr-pdf does "
+                         "not repeat it")
     a = ap.parse_args()
     if a.with_ocr and not a.count:
         ap.error("--with-ocr only means anything with --count")
@@ -574,7 +575,7 @@ def main():
                      f"billing unit")
         lines.append(f"  segments             {segs:>9,}   prose only")
         if segs:
-            sps, measured = trlib.sec_per_segment()
+            sps, basis = trlib.sec_per_segment()
             secs = segs * sps
             if secs < 3600:
                 span = f"{secs / 60:,.0f} min"
@@ -583,9 +584,6 @@ def main():
             else:
                 span = f"{secs / 3600:,.0f} h  ({secs / 86400:,.1f} days)"
             lines.append(f"  machine time         ~{span}")
-            basis = (f"measured for {trlib.MODEL}" if measured else
-                     f"NOT measured for {trlib.MODEL or 'this pair'}, so the "
-                     f"slowest figure there is")
             lines.append(f"       at {sps:.0f}s/segment, {basis}, "
                          f"and before the memory collapses repeats")
         allw = total(examined, "words")

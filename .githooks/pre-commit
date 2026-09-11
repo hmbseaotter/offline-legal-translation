@@ -79,7 +79,15 @@ fi
 if [[ -x tools/gen-docs.py ]]; then
   py=python3
   [[ -x "$HOME/.translate-venv/bin/python" ]] && py="$HOME/.translate-venv/bin/python"
-  if ! out="$("$py" tools/gen-docs.py 2>&1)"; then
+  # Checked against the staged files, not the working tree: a registry edit
+  # left unstaged passed the gate while the commit carried tables that
+  # disagreed with the registry it carried.
+  staged="$(mktemp -d)"
+  git checkout-index -a --prefix="$staged/"
+  status=0
+  out="$("$py" "$staged/tools/gen-docs.py" 2>&1)" || status=$?
+  rm -rf "$staged"
+  if [[ $status -ne 0 ]]; then
     {
       echo
       echo "  BLOCKED: the documented tables have drifted from lib/registry.py"

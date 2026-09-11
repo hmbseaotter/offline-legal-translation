@@ -133,13 +133,10 @@ def main():
         # A per-segment cost measured for each model, not tokens over a rate
         # -- see trlib.SEC_PER_SEGMENT for why that distinction was worth
         # ~5x. Short cells are cheaper, but only by the generation part.
-        sps, measured = trlib.sec_per_segment()
+        sps, basis = trlib.sec_per_segment()
         model_work = len(uniq) - len(values)
         model_cells = total - sum(counter[v] for v in values)
         est = model_work * sps / 3600
-        basis = (f"measured for {trlib.MODEL}" if measured else
-                 f"not measured for {trlib.MODEL or 'this pair'}; slowest "
-                 f"figure there is")
         print(f"\n  rough translation time at {sps:.0f}s/segment "
               f"({basis}): {est:.1f} h "
               f"(vs {model_cells * sps / 3600:.0f} h without dedup)",
