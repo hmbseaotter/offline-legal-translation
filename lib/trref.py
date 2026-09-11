@@ -12,7 +12,8 @@ WHERE THEY GO -- inside the project, so inside the container:
 
 Anywhere under reference/, subfolders allowed. The two files of a pair sit in
 the same folder and have the same name apart from a language suffix, the last
-underscore-separated part before the extension: _English, _German, _Slovene,
+underscore-separated part before the extension -- or before every extension of
+a name such as lease_German.pdf.docx: _English, _German, _Slovene,
 or _EN, _DE, _SL, in any case. The extensions may differ, so a Word original
 pairs with a PDF translation.
 
@@ -150,15 +151,43 @@ _SUFFIX_RE = re.compile(
     r"^(?P<stem>.+)_(?P<lang>[A-Za-z]+)(?:-(?P<region>[A-Za-z]{2}))?$")
 
 
+# Extensions that follow one another in a name, the language label standing
+# before all of them: tr-run delivers lease.pdf as lease_German.pdf.docx when
+# lease.docx shares its folder. Only these count, so the dot in
+# "Pogodba 5.1.docx" is part of the name.
+CHAINED_EXTS = {".docx", ".doc", ".pdf", ".txt", ".rtf", ".odt",
+                ".xlsx", ".xlsm", ".xltx", ".xltm", ".xls", ".ods"}
+
+
+def split_name(name):
+    """(base, extensions) of a file name, the extensions being what a language
+    label goes before: ('lease', '.pdf.docx'), ('Pogodba 5.1', '.docx')."""
+    base, exts = os.path.splitext(name)
+    while True:
+        b, e = os.path.splitext(base)
+        if not b or e.lower() not in CHAINED_EXTS:
+            return base, exts
+        base, exts = b, e + exts
+
+
+def label(code):
+    """The label a file name takes for a language, spelled as file_language()
+    reads it: '_English' for en, '_German' for de and de-DE, '_German-CH'."""
+    lang, _, region = trlib.lang_code(code).partition("-")
+    return f"_{trlib.LANG[lang]}" + (f"-{region}" if region else "")
+
+
 def file_language(name):
     """(stem, language) for 'lease-2023_German-CH.pdf', or (None, None).
 
     The language in trlib.lang_code()'s spelling: 'de-CH' here, and plain
     'de' for _German and _German-DE alike. A variant the language does not
     have -- _English-GB, _German-XX -- counts as no suffix, so the file is
-    listed as unlabelled rather than filed as something it may not be.
+    listed as unlabelled rather than filed as something it may not be. The
+    label stands before every extension of a chain: lease_German.pdf.docx
+    is German, and lease.pdf.docx has no label.
     """
-    m = _SUFFIX_RE.match(os.path.splitext(name)[0])
+    m = _SUFFIX_RE.match(split_name(name)[0])
     lang = SUFFIX_LANG.get(m.group("lang").lower()) if m else None
     if lang and m.group("region"):
         lang = trlib.lang_code(f"{lang}-{m.group('region')}")

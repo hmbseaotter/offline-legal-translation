@@ -5,6 +5,7 @@ import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import io
 import os
+import shutil
 import unittest
 from contextlib import redirect_stderr
 
@@ -421,6 +422,31 @@ class ThroughTheTools(unittest.TestCase):
         code, out = support.run("tr-ref", root)
         self.assertEqual(code, 0, out)
         self.assertNotIn("3.550 EUR", rejected())
+
+
+class Labels(unittest.TestCase):
+
+    def test_a_label_stands_before_every_extension(self):
+        for name, want in [("lease_German.pdf.docx", ("lease", "de")),
+                           ("Pogodba 5.1_German-CH.docx", ("Pogodba 5.1", "de-CH")),
+                           ("photo_English.jpg", ("photo", "en")),
+                           ("lease.pdf.docx", (None, None))]:
+            self.assertEqual(trref.file_language(name), want, name)
+        self.assertEqual(trref.split_name("lease.pdf.docx"), ("lease", ".pdf.docx"))
+        self.assertEqual(trref.split_name("Pogodba 5.1.docx"), ("Pogodba 5.1", ".docx"))
+        self.assertEqual([trref.label(c) for c in ("en", "de-DE", "de-CH")],
+                         ["_English", "_German", "_German-CH"])
+
+    def test_a_translation_named_for_a_collision_pairs(self):
+        folder = os.path.join(trlib.ROOT, "reference", "labels")
+        support.write_text(os.path.join(folder, "lease_English.txt"), "The rent is 850 EUR.\n")
+        support.write_docx(os.path.join(folder, "lease_German.txt.docx"),
+                           ["Die Miete beträgt 850 EUR."])
+        try:
+            pairs = trref.find_pairs("en", "de")[0]
+            self.assertEqual([doc for doc, *_rest in pairs], ["labels/lease"])
+        finally:
+            shutil.rmtree(folder)
 
 
 class FirstMentionOfReferences(unittest.TestCase):
