@@ -1,9 +1,12 @@
 """A prompt file replacing the kit's: named, or refused when it has no
-per-language blocks. Audit 2026-09-10: M-5."""
+per-language blocks; and {when} conditions, read in any case and refused when
+a value names nothing. Audit 2026-09-10: M-5, L-3."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import os
 import unittest
+
+import trlib
 
 
 class PromptOverride(unittest.TestCase):
@@ -37,6 +40,19 @@ class PromptOverride(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn(f"PROMPT OVERRIDE: {root}/prompts/translate.txt", out)
         self.assertIn(f"note: the prompt is {root}/prompts/translate.txt", out)
+
+
+class Conditions(unittest.TestCase):
+
+    def test_conditions_are_read_in_any_case(self):
+        text = "A\n{when VARIANT=ch}\nSWISS\n{end}\n{when tgt=DE}\nGERMAN\n{end}\nZ\n"
+        self.assertEqual(trlib._select_blocks(text, "en", "de-CH", "t"),
+                         "A\nSWISS\nGERMAN\nZ\n")
+
+    def test_a_value_that_names_nothing_is_refused(self):
+        for cond in ("TGT=fr", "VARIANT=XX", "PAIR=en-fr", "SRC=de-CH"):
+            with self.assertRaises(SystemExit, msg=cond):
+                trlib._select_blocks(f"{{when {cond}}}\nX\n{{end}}\n", "en", "de", "t")
 
 
 if __name__ == "__main__":

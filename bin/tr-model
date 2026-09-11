@@ -42,12 +42,21 @@ echo
 # list kept here. The advice for any other name used to be exporting
 # TR_MODEL from ~/.bashrc -- which, with the model chosen per pair, would
 # send every pair of every project to this one model.
-routed="$(python3 -c '
+#
+# Its errors are shown. A kit that cannot be read -- a malformed prompt
+# override, say -- is a different answer from "no pair uses this name", and
+# hiding the error turned the one into the other.
+if ! routed="$(python3 -c '
 import sys
 sys.path.insert(0, sys.argv[1])
 import trlib
 print(" ".join(f"{s}->{t}" for (s, t), m in sorted(trlib.PAIR_MODELS.items())
-               if m == sys.argv[2]))' "$(dirname "$0")/../lib" "$NAME" 2>/dev/null || true)"
+               if m == sys.argv[2]))' "$(dirname "$0")/../lib" "$NAME")"; then
+  echo "$NAME is registered, but the kit's routing table could not be read"
+  echo "(the error is above), so which pairs use it is not known. Fix that"
+  echo "and run tr-model again."
+  exit 1
+fi
 if [[ -n "$routed" ]]; then
   echo "Nothing to set: $NAME is already the model for $routed."
 else

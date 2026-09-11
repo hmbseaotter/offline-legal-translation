@@ -10,12 +10,16 @@ without a restart:
     {"models":   ["gams3:q8", "eurollm9b-2512:q8"],
      "map":      {"source text": "reply"},
      "map_firm": {"source text": "reply to the firmer retry"},
+     "cut":      ["source text"],
+     "cut_firm": ["source text"],
      "wrap":     "<<{}>>"}
 
 A source with no entry is answered wrap.format(source). A numbered batch is
-answered line by line by the same rules. Every request is appended to LOG as
-one JSON line: the model, whether it was a batch or a firm retry, the prompt
-and the reply.
+answered line by line by the same rules. A source in cut is answered with
+done_reason "length", as a reply stopped at num_predict is -- a batch holding
+one, too -- and cut_firm does the same to the firmer retry. Every request is
+appended to LOG as one JSON line: the model, whether it was a batch or a firm
+retry, whether it was cut, the prompt and the reply.
 """
 import json
 import re
@@ -65,16 +69,20 @@ class Handler(BaseHTTPRequestHandler):
         firm, batch = prompt.startswith(FIRM), prompt.startswith(BATCH)
         body = prompt.split("\n\n", 1)[-1] if firm or batch else prompt
         if batch:
-            lines = (re.match(r"^(\d+)\. (.*)$", ln) for ln in body.splitlines())
+            lines = [m for m in (re.match(r"^(\d+)\. (.*)$", ln) for ln in body.splitlines())
+                     if m]
             out = "\n".join(f"{m.group(1)}. " + reply(m.group(2), False, r).replace("\n", " ")
-                            for m in lines if m)
+                            for m in lines)
+            cut = any(m.group(2) in r.get("cut", []) for m in lines)
         else:
             out = reply(body, firm, r)
+            cut = body in r.get("cut_firm" if firm else "cut", [])
         with open(LOG, "a", encoding="utf-8") as fh:
             fh.write(json.dumps({"model": req.get("model"), "firm": firm, "batch": batch,
-                                 "prompt": prompt, "reply": out}, ensure_ascii=False) + "\n")
+                                 "cut": cut, "prompt": prompt, "reply": out},
+                                ensure_ascii=False) + "\n")
         self.send({"model": req.get("model"), "response": out, "done": True,
-                   "done_reason": "stop"})
+                   "done_reason": "length" if cut else "stop"})
 
 
 if __name__ == "__main__":

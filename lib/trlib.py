@@ -592,12 +592,15 @@ def project_pair(src=None, tgt=None):
         sys.exit(f"TR_SRC is {src}, which is no source language this kit knows. "
                  f"Sources: {', '.join(SOURCES)}.")
     t = lang_code(tgt)
-    if t is None:
+    if t is None or base_lang(t) not in LANG:
         variants = ", ".join(f"{lang}-{r}" for lang, rs in VARIANTS.items()
                              for r in rs)
         sys.exit(f"TR_TGT is {tgt!r}, which is no language or variant this kit "
                  f"knows. The languages are {', '.join(LANG)}; the variants "
                  f"are {variants}.")
+    if base_lang(t) == src:
+        sys.exit(f"TR_SRC and TR_TGT are both {src} - set the pair in "
+                 f"project.conf first")
     return src, t
 
 
@@ -606,6 +609,9 @@ def translation_pair(src=None, tgt=None):
     prompt override that would draft without the per-language rules."""
     global _OVERRIDE_NOTED
     s, t = project_pair(src, tgt)
+    # A pair no model is chosen for is refused here, before a worker counts
+    # its segments or tr-run -n lists what it would draft.
+    require_model(s, t)
     if t != base_lang(t) and t not in VARIANTS_DRAFTED:
         sys.exit(f"TR_TGT is {t}, and drafting into it is not built yet: no "
                  f"prompt rules or conversions of dates, amounts and times "
@@ -1821,6 +1827,11 @@ LANG = {"sl": "Slovene", "en": "English", "de": "German"}
 # Slovene->English call has no use for the German rules.
 _WHEN_RE = re.compile(r"^\{when\s+([^}]*)\}$")
 _END_RE = re.compile(r"^\{end\}$")
+_WHEN_VALUES = {
+    "SRC": set(LANG), "TGT": set(LANG),
+    "VARIANT": {v for vs in VARIANTS.values() for v in vs},
+    "PAIR": {f"{a}-{b}" for a in LANG for b in LANG if a != b},
+}
 
 
 def _select_blocks(text, src_lang, tgt_lang, where):
@@ -1839,11 +1850,22 @@ def _select_blocks(text, src_lang, tgt_lang, where):
             opened, keep = n, True
             for cond in m.group(1).split():
                 k, _, vals = cond.partition("=")
+                k = k.upper()
                 if k not in facts or not vals:
                     sys.exit(f"{where}:{n}: cannot read {cond!r} - write "
                              f"SRC=, TGT=, VARIANT= or PAIR=, e.g. "
                              f"{{when TGT=de VARIANT=CH}}")
-                keep = keep and facts[k] in vals.split(",")
+                # Read in any case, and refused when a value names nothing:
+                # {when TGT=fr} or {when VARIANT=ch} dropped its block for
+                # every pair without a word.
+                spell = str.upper if k == "VARIANT" else str.lower
+                wanted = {spell(v) for v in vals.split(",")}
+                unknown = sorted(wanted - _WHEN_VALUES[k])
+                if unknown:
+                    sys.exit(f"{where}:{n}: {k}={','.join(unknown)} names nothing "
+                             f"this kit knows - {k} takes "
+                             f"{', '.join(sorted(_WHEN_VALUES[k]))}")
+                keep = keep and facts[k] in wanted
             continue
         if _END_RE.match(line.strip()):
             if not opened:
@@ -2478,14 +2500,20 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3, first=None
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"})
         try:
+            cut = False
             if attempt == 0 and first is not None:
                 out = first
             else:
                 with urllib.request.urlopen(req, timeout=1800) as r:
-                    out = json.loads(r.read())["response"].strip()
+                    reply = json.loads(r.read())
+                out = reply["response"].strip()
+                # Stopped by num_predict rather than finished: the end of the
+                # translation is missing, however well the start reads.
+                cut = reply.get("done_reason") == "length"
             out = re.sub(r"^```.*?\n|```$", "", out, flags=re.S).strip()
-            if out and implausible(text, out):
-                last = "the reply was far longer than the source"
+            if out and (cut or implausible(text, out)):
+                last = ("the reply was cut off at the length limit" if cut
+                        else "the reply was far longer than the source")
                 if firm:
                     break
                 firm = True
@@ -2565,9 +2593,12 @@ def _translate_batch(texts, src_lang, tgt_lang, gloss):
         headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=1800) as r:
-            out = json.loads(r.read())["response"].strip()
+            reply = json.loads(r.read())
+        out = reply["response"].strip()
     except Exception:
         return None
+    if reply.get("done_reason") == "length":
+        return None                        # cut off: its last lines are missing
     out = re.sub(r"^```.*?\n|```$", "", out, flags=re.S).strip()
 
     got = {}

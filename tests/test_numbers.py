@@ -1,5 +1,5 @@
 """Dates, amounts and times: conversion, comparison, and choosing between
-replies. Audit 2026-09-10: H-5, H-6, H-7, M-1, M-2, M-3."""
+replies. Audit 2026-09-10: H-5, H-6, H-7, M-1, M-2, M-3, L-2."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import unittest
@@ -281,6 +281,20 @@ class RetrySelection(unittest.TestCase):
         self.assertEqual(trlib.ollama_translate_many(["2:30pm", "EUR 20"], "en", "de"),
                          ["14:30", "EUR 20"])
         self.assertEqual(len(self.mock.requests()), before)
+
+    def test_a_reply_cut_off_is_retried_and_never_kept(self):
+        src = "Najemnik plača najemnino do petega dne v mesecu."
+        whole = "The tenant pays the rent by the fifth day of the month."
+        self.mock.set({"map": {src: "The tenant pays the rent by the"}, "cut": [src],
+                       "map_firm": {src: whole}})
+        before = len(self.mock.requests())
+        self.assertEqual(trlib.ollama_translate(src, "sl", "en"), whole)
+        self.assertEqual([(r["firm"], r["cut"]) for r in self.mock.requests()[before:]],
+                         [(False, True), (True, False)])
+        cut = "Najemodajalec vzdržuje streho in fasado."
+        self.mock.set({"map": {cut: "The landlord maintains"}, "cut": [cut], "cut_firm": [cut]})
+        self.assertTrue(trlib.ollama_translate(cut, "sl", "en").startswith("[TRANSLATION FAILED]"))
+        self.assertIsNone(trlib.tm_get(cut, "sl-en"))
 
 
 class SwissDrafts(unittest.TestCase):
