@@ -1053,11 +1053,13 @@ class FirstMention:
 
 # Dates, amounts and times are converted to the target locale rather than
 # reproduced verbatim -- the translator's rule. Inside a sentence the model
-# does it, instructed by the prompt. A segment that is ONLY a date or an
-# amount never reaches the model: is_translatable() is false for it, so it
-# was returned untouched. A spreadsheet Datum column therefore stayed in
-# Slovene form while the same date in prose became English, and the
-# deliverable contradicted itself column by column.
+# does it, instructed by the prompt. A segment that is ONLY a date, a time or
+# an amount never reaches the model: localize() converts it first. It was
+# once returned untouched, because is_translatable() is false for it, so a
+# spreadsheet Datum column stayed in Slovene form while the same date in
+# prose became English, and the deliverable contradicted itself column by
+# column. And is_translatable() is true for March 5, 2024 or 2:30 p.m., which
+# have letters, so asking it first sent those to the model.
 #
 # Doing it here instead of sending these to the model is also ~48 s per
 # unique value cheaper, and deterministic: the same input always yields the
@@ -1081,7 +1083,14 @@ _DATE_EN = re.compile(
     re.IGNORECASE)
 _TIME_HM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 _TIME_AMPM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*([ap])\.?\s*m\.?\s*$", re.I)
-_AMOUNT = re.compile(r"^\s*([\d.,]+)\s*(EUR|USD|CHF|GBP|SIT|€|\$|£)\s*$")
+# A Slovene date with its month named, in either case a date takes:
+# 5. marec 2024, 5. marca 2024.
+_SL_MONTH_FORMS = {name: i for i, names in enumerate(zip(
+    _SL_MONTHS, ("januarja", "februarja", "marca", "aprila", "maja", "junija",
+                 "julija", "avgusta", "septembra", "oktobra", "novembra",
+                 "decembra")), 1) for name in names}
+_DATE_SL_NAMED = re.compile(
+    r"^\s*(\d{1,2})\.\s*(" + "|".join(_SL_MONTH_FORMS) + r")\s+(\d{4})\.?\s*$", re.I)
 _SL_DECIMAL = re.compile(r"^(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d+)?$")
 _EN_DECIMAL = re.compile(r"^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
 # An English number that reads as well as a section or clause, a version or
@@ -1106,8 +1115,11 @@ def _en_number_to_sl(s):
 
 def _sl_to_en(s):
     m = _DATE_DMY.match(s)
+    named = None if m else _DATE_SL_NAMED.match(s)
+    m = m or named
     if m:
-        d, mo, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        d, y = int(m.group(1)), m.group(3)
+        mo = _SL_MONTH_FORMS[m.group(2).lower()] if named else int(m.group(2))
         if 1 <= mo <= 12 and 1 <= d <= 31:
             # "March 5, 2024" -- the form the translator specifies for
             # English. Not "5 March 2024": that was this file's own invention
@@ -1122,12 +1134,7 @@ def _sl_to_en(s):
             return f"{h % 12 or 12}:{mi} {'a.m.' if h < 12 else 'p.m.'}"
         return None
 
-    m = _AMOUNT.match(s)
-    if m:
-        num = _sl_number_to_en(m.group(1))
-        return f"{num} {m.group(2)}" if num else None
-
-    return _sl_number_to_en(s)
+    return _decorated(s, lambda number, _m: _sl_number_to_en(number))
 
 
 def _en_to_sl(s):
@@ -1162,12 +1169,7 @@ def _en_to_sl(s):
             return f"{h24:02d}:{mi}"
         return None
 
-    m = _AMOUNT.match(s)
-    if m:
-        num = _en_number_to_sl(m.group(1))
-        return f"{num} {m.group(2)}" if num else None
-
-    return None if _AMBIGUOUS_POINT.fullmatch(s) else _en_number_to_sl(s)
+    return _decorated(s, _comma_decimal)
 
 
 # Capitalised: German capitalises nouns, month names among them.
@@ -1205,12 +1207,7 @@ def _en_to_de(s):
             return f"{h24:02d}:{mi}"
         return None
 
-    m = _AMOUNT.match(s)
-    if m:
-        num = _en_number_to_sl(m.group(1))
-        return f"{num} {m.group(2)}" if num else None
-
-    return None if _AMBIGUOUS_POINT.fullmatch(s) else _en_number_to_sl(s)
+    return _decorated(s, _comma_decimal)
 
 
 # Switzerland writes German by the Swiss Federal Chancellery's Schreibweisungen
@@ -1235,17 +1232,51 @@ NBSP = "\u00a0"
 # A word joiner: no width, and no line break on either side of it.
 WJ = "\u2060"
 _CURRENCY = r"CHF|Fr\.|EUR|USD|GBP|SIT|€|\$|£"
-_CH_AMOUNT = re.compile(rf"^\s*(?:(?P<pre>{_CURRENCY})\s*(?P<a>[\d.,]+)"
-                        rf"|(?P<b>[\d.,]+)\s*(?P<post>{_CURRENCY}))\s*$")
+# A value and what may stand around its number: a currency before or after
+# it, a sign, accounting brackets, a percent sign -- $1,000, -1,250.00,
+# (1,250.00), € 12.450,00, 12.5%. Outside Switzerland what stands around the
+# number is kept as written.
+_VALUE = re.compile(
+    rf"^(?P<open>\(\s*)?(?P<sign>[-−+]\s*)?(?:(?P<pre>{_CURRENCY})\s*)?"
+    rf"(?P<sign2>[-−+])?(?P<num>\d[\d.,]*?)"
+    rf"(?:\s*(?:(?P<post>{_CURRENCY})|(?P<pct>%)))?(?P<close>\s*\))?$")
 
 
-def _swiss_number(s, money):
+def _value_match(s):
+    m = _VALUE.match(s)
+    return m if m and bool(m.group("open")) == bool(m.group("close")) else None
+
+
+def _quantity(m):
+    """Does what stands beside the number make it a quantity: a currency, a
+    sign or a percent? Brackets alone do not: (3.2) is a clause as often."""
+    return any(m.group(g) for g in ("pre", "post", "pct", "sign", "sign2"))
+
+
+def _decorated(s, convert):
+    """s with its number converted by convert(number, match), and what stands
+    around it kept; None if s is not a value, or convert() gives None."""
+    m = _value_match(s)
+    number = m and convert(m.group("num"), m)
+    return s[:m.start("num")] + number + s[m.end("num"):] if number else None
+
+
+def _comma_decimal(number, m):
+    """An English number as Slovene and German write it, 1.234,56. Not one
+    that reads as a reference or a time as well as a decimal, unless what
+    stands beside it makes it a quantity."""
+    if _AMBIGUOUS_POINT.fullmatch(number) and not _quantity(m):
+        return None
+    return _en_number_to_sl(number)
+
+
+def _swiss_number(s, money, quantity=False):
     """An English-format number in Swiss form, or None if s is not one:
     12,450.00 as 12 450,00, or 12 450.00 when it is money; 1,250 as 1250."""
-    # Bare digits with no currency beside them are left as they stand: 80331
-    # is as likely a postcode, an account or a file number as a quantity, and
-    # an identifier is reproduced verbatim.
-    if not _EN_DECIMAL.fullmatch(s) or (s.isdigit() and not money):
+    # Bare digits with no currency, sign or percent beside them are left as
+    # they stand: 80331 is as likely a postcode, an account or a file number
+    # as a quantity, and an identifier is reproduced verbatim.
+    if not _EN_DECIMAL.fullmatch(s) or (s.isdigit() and not (money or quantity)):
         return None
     integer, _, fraction = s.replace(",", "").partition(".")
     if len(integer) > 4:
@@ -1270,17 +1301,25 @@ def _en_to_ch(s):
         if 0 <= h <= 23 and 0 <= int(mi) <= 59:
             return f"{h}.{mi}"
         return None
-    m = _CH_AMOUNT.match(s)
-    if m:
-        currency = m.group("pre") or m.group("post")
-        number = _swiss_number(m.group("a") or m.group("b"), money=True)
-        if number is None:
-            return None
-        integer, _, fraction = number.partition(".")
-        if currency in ("CHF", "Fr.") and not fraction.strip("0"):
-            return f"Fr.{NBSP}{integer}.{WJ}–"     # one line: _whole_francs()
-        return f"{currency} {number}"
-    return None if _AMBIGUOUS_POINT.fullmatch(s) else _swiss_number(s, money=False)
+    m = _value_match(s)
+    if not m or (_AMBIGUOUS_POINT.fullmatch(m.group("num")) and not _quantity(m)):
+        return None
+    currency = m.group("pre") or m.group("post")
+    number = _swiss_number(m.group("num"), money=bool(currency),
+                           quantity=bool(m.group("pct") or m.group("sign")
+                                         or m.group("sign2")))
+    if number is None:
+        return None
+    if not currency:
+        return s[:m.start("num")] + number + s[m.end("num"):]
+    # The currency goes first, and a sign before it: -CHF 12 450.50.
+    sign = (m.group("sign") or "").strip() + (m.group("sign2") or "")
+    integer, _, fraction = number.partition(".")
+    if currency in ("CHF", "Fr.") and not fraction.strip("0"):
+        amount = f"Fr.{NBSP}{integer}.{WJ}–"     # one line: _whole_francs()
+    else:
+        amount = f"{currency} {number}"
+    return ("(" if m.group("open") else "") + sign + amount + (")" if m.group("close") else "")
 
 
 _SHARP_S = re.compile(r"\w*[ßẞ]\w*")
@@ -1329,19 +1368,37 @@ def localize(text, src_lang, tgt_lang):
     An all-numeric date like 03/05/2024 is left alone in both directions,
     because which number is the month cannot be known and guessing would move
     the date by months.
+
+    A value may carry a currency on either side, a sign, accounting brackets
+    or a percent sign, each kept with it: -1,250.00 into German is -1.250,00,
+    and $1,000 is $1.000. Two values joined by a dash are a range, and each
+    end is converted: 12:00–13:00 into English is 12:00 p.m.–1:00 p.m.
     """
+    local = _local_value(text, src_lang, tgt_lang)
+    return text if local is None else local
+
+
+_CONVERTERS = {("sl", "en"): _sl_to_en, ("en", "sl"): _en_to_sl,
+               ("en", "de"): _en_to_de, ("en", "de-CH"): _en_to_ch}
+_RANGE = re.compile(r"^(\S.*?)(\s*[–-]\s*)(\S.*)$")
+
+
+def _local_value(text, src_lang, tgt_lang):
+    """What localize() makes of a segment that is a date, a time or an amount
+    -- the segment itself when it is already in the target's form -- or None
+    when it is no such value, or one this pair leaves alone."""
     s = (text or "").strip()
-    if not s:
-        return text
-    if src_lang == "sl" and tgt_lang == "en":
-        return _sl_to_en(s) or text
-    if src_lang == "en" and tgt_lang == "sl":
-        return _en_to_sl(s) or text
-    if src_lang == "en" and tgt_lang == "de":
-        return _en_to_de(s) or text
-    if src_lang == "en" and tgt_lang == "de-CH":
-        return _en_to_ch(s) or text
-    return text
+    convert = _CONVERTERS.get((src_lang, tgt_lang))
+    if not s or convert is None:
+        return None
+    local = convert(s)
+    if local is None:
+        m = _RANGE.match(s)
+        ends = m and (convert(m.group(1)), convert(m.group(3)))
+        # Both ends, and one of them changed: 2024-03-05 is no range.
+        if ends and None not in ends and ends != (m.group(1), m.group(3)):
+            local = ends[0] + m.group(2) + ends[1]
+    return local
 
 
 def is_translatable(s):
@@ -1887,6 +1944,9 @@ PROMPT_VERSION = prompt_version(os.environ.get("TR_SRC", "sl"), _env_target())
 # "5.10.2024" is not one followed by more of it.
 _SL_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:\.\d{3})*|\d+),(\d{1,2})(?![\d,]|\.\d)")
 _EN_AMOUNT = re.compile(r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)\.(\d{1,2})(?![\d,]|\.\d)")
+# A whole number with its thousands grouped, 1.250 or 1,250.
+_SL_GROUPED = re.compile(r"(?<![\d,.])\d{1,3}(?:\.\d{3})+(?!\d|[.,]\d)")
+_EN_GROUPED = re.compile(r"(?<![\d,.])\d{1,3}(?:,\d{3})+(?!\d|[.,]\d)")
 _COMMA_DECIMAL = {"sl", "de"}
 _POINT_DECIMAL = {"en"}
 
@@ -2021,9 +2081,11 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
     if src_lang in _POINT_DECIMAL and tgt_lang == "de-CH":
         return _fix_swiss_numbers(src, tgt)
     if src_lang in _COMMA_DECIMAL and tgt_lang in _POINT_DECIMAL:
-        pat, thou_out, dec_out, strip, guarded = _SL_AMOUNT, ",", ".", ".", False
+        pat, grouped, thou_out, dec_out, strip, guarded = \
+            _SL_AMOUNT, _SL_GROUPED, ",", ".", ".", False
     elif src_lang in _POINT_DECIMAL and tgt_lang in _COMMA_DECIMAL:
-        pat, thou_out, dec_out, strip, guarded = _EN_AMOUNT, ".", ",", ",", True
+        pat, grouped, thou_out, dec_out, strip, guarded = \
+            _EN_AMOUNT, _EN_GROUPED, ".", ",", ",", True
     else:
         return tgt
 
@@ -2034,10 +2096,22 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
             continue
         digits = m.group(1).replace(strip, "")
         subs[m.group(0)] = _regroup(digits, thou_out) + dec_out + m.group(2)
+    # A whole number with its thousands grouped is converted too: to a German
+    # reader, 1,250 shares are one and a quarter. A group of three digits is
+    # no decimal in either notation, but after a reference word, in the
+    # source or in the draft, it is left.
+    whole = {m.group(0) for m in grouped.finditer(src)
+             if not _protected(src, m.start(), m.end())}
+    for number in whole:
+        subs[number] = number.replace(strip, thou_out)
+
+    def spell(number, m):
+        if number in whole and _protected(tgt, m.start(), m.end()):
+            return None
+        return subs[number]
     # A number that is a reference or a time anywhere in the source is not
     # rewritten anywhere in the draft, which may have moved it.
-    tgt = _rewrite_numbers(tgt, set(subs) - kept,
-                           lambda number, _m: subs[number], guarded)
+    tgt = _rewrite_numbers(tgt, set(subs) - kept, spell, guarded)
     return _restore_references(tgt, kept - set(subs)) if guarded else tgt
 
 
@@ -2258,10 +2332,11 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3, first=None
     # first is a reply the text already has, from a batch that flagged it. It
     # is judged as the first reply, so that only a retry costs a call.
     src_lang, tgt_lang = translation_pair(src_lang, tgt_lang)
+    local = _local_value(text, src_lang, tgt_lang)
+    if local is not None:
+        return local          # a date, a time or an amount: converted in code
     if not is_translatable(text):
-        # Not model work, but not necessarily unchanged either: a segment that
-        # is only a date or an amount still gets its locale converted.
-        return localize(text, src_lang, tgt_lang)
+        return text
     ref = reference_translation(text, f"{src_lang}-{tgt_lang}", gloss)
     if ref is not None:
         return ref
@@ -2429,8 +2504,9 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
     pending = []
 
     for i, t in enumerate(texts):
-        if not is_translatable(t):
-            out[i] = localize(t, src_lang, tgt_lang)
+        local = _local_value(t, src_lang, tgt_lang)
+        if local is not None or not is_translatable(t):
+            out[i] = t if local is None else local
             continue
         ref = reference_translation(t, direction, gloss)
         if ref is not None:

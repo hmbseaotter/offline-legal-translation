@@ -216,7 +216,8 @@ Do not change these without discussing with the operator first.
    `14.30`, and ss for ß except in a word the source has too.
    From English, a number such as `5.10`, `3.2` or `14.30` reads as well as
    a section, a clause or a time as it does as a decimal. It is converted
-   only with a currency beside it or a thousands separator in it, and never
+   only with a currency, a sign or a percent beside it or a thousands
+   separator in it, and never
    after a reference word (`Section 5.10`, `Art. 3.2`, `§ 5.1`) or in a time
    (`at 10.30`, `14.30 Uhr`); `tr-lint` lists every one written as a
    decimal (DEC). Dates compare as one value however they are written —

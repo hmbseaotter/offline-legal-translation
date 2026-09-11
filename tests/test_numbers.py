@@ -1,5 +1,5 @@
 """Dates, amounts and times: conversion, comparison, and choosing between
-replies. Audit 2026-09-10: H-5, H-6, H-7, M-1."""
+replies. Audit 2026-09-10: H-5, H-6, H-7, M-1, M-3."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import unittest
@@ -34,6 +34,36 @@ class Localize(unittest.TestCase):
         self.assertEqual(trlib.localize("1,234.56", "en", "sl"), "1.234,56")
         self.assertEqual(trlib.localize("12.450,00 EUR", "sl", "en"), "12,450.00 EUR")
         self.assertEqual(trlib.localize("5. 3. 2024", "sl", "en"), "March 5, 2024")
+
+    def test_a_value_keeps_what_stands_around_it(self):
+        for v, s, t, want in [
+                ("$1,000", "en", "de", "$1.000"),
+                ("-1,250.00", "en", "de", "-1.250,00"),
+                ("(1,250.00)", "en", "de", "(1.250,00)"),
+                ("12.5%", "en", "de", "12,5%"),
+                ("€12,450.00", "en", "de", "€12.450,00"),
+                ("€ 12.450,00", "sl", "en", "€ 12,450.00"),
+                ("-12.450,00", "sl", "en", "-12,450.00"),
+                ("(CHF 1,250.00)", "en", "de-CH", f"(Fr.{NBSP}1250.{WJ}–)"),
+                ("-12,450", "en", "de-CH", f"-12{NBSP}450"),
+                ("12.5%", "en", "de-CH", "12,5%")]:
+            self.assertEqual(trlib.localize(v, s, t), want, (v, s, t))
+
+    def test_brackets_alone_do_not_make_a_quantity(self):
+        self.assertEqual(trlib.localize("(3.2)", "en", "de"), "(3.2)")
+
+    def test_ranges(self):
+        self.assertEqual(trlib.localize("12:00–13:00", "sl", "en"),
+                         "12:00 p.m.–1:00 p.m.")
+        self.assertEqual(trlib.localize("12:00–13:00", "en", "de-CH"), "12.00–13.00")
+        self.assertEqual(trlib.localize("2:30 p.m.–4:00 p.m.", "en", "de"), "14:30–16:00")
+        self.assertEqual(trlib.localize("1,000-2,000", "en", "de"), "1.000-2.000")
+        for v in ("2024-03-05", "5.10–5.12"):
+            self.assertEqual(trlib.localize(v, "en", "de"), v)
+
+    def test_slovene_month_names(self):
+        for v in ("5. marec 2024", "5. marca 2024"):
+            self.assertEqual(trlib.localize(v, "sl", "en"), "March 5, 2024")
 
 
 class FixNumericFormat(unittest.TestCase):
@@ -97,6 +127,17 @@ class FixNumericFormat(unittest.TestCase):
         self.assertEqual(trlib.finish_draft("The price is CHF 12,450.50.",
                                             "Der Preis ist CHF 12,450.50.", "en", "de-CH"),
                          f"Der Preis ist CHF 12{NBSP}450.50.")
+
+    def test_grouped_whole_numbers(self):
+        for src, tgt, s, t, want in [
+                ("He holds 1,250 shares.", "Er hält 1,250 Aktien.", "en", "de",
+                 "Er hält 1.250 Aktien."),
+                ("He holds 1,250 shares.", "Ima 1,250 delnic.", "en", "sl",
+                 "Ima 1.250 delnic."),
+                ("Ima 1.250 delnic.", "He holds 1.250 shares.", "sl", "en",
+                 "He holds 1,250 shares."),
+                ("See item 1,250.", "Siehe Punkt 1,250.", "en", "de", "Siehe Punkt 1,250.")]:
+            self.assertEqual(trlib.finish_draft(src, tgt, s, t), want, (src, t))
 
     def test_rewrites_of_ambiguous_numbers_are_listed(self):
         self.assertEqual(trlib.decimal_rewrites(
@@ -233,6 +274,13 @@ class RetrySelection(unittest.TestCase):
         self.assertEqual([(r["batch"], r["firm"]) for r in reqs], [(True, False), (False, True)])
         self.assertEqual(out[0], "<<Opis blaga aa>>")
         self.assertEqual(out[-2:], ["Paid on March 5, 2024", "File number"])
+
+    def test_a_value_with_letters_is_converted_in_code(self):
+        before = len(self.mock.requests())
+        self.assertEqual(trlib.ollama_translate("March 5, 2024", "en", "de"), "5. März 2024")
+        self.assertEqual(trlib.ollama_translate_many(["2:30pm", "EUR 20"], "en", "de"),
+                         ["14:30", "EUR 20"])
+        self.assertEqual(len(self.mock.requests()), before)
 
 
 if __name__ == "__main__":
