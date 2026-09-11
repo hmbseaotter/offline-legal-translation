@@ -112,8 +112,9 @@ class ThroughTrRun(unittest.TestCase):
         root = support.project("case-clash", "sl", "en")
         support.write_docx(f"{root}/source/a/X.docx", [self.FIRST])
         support.write_docx(f"{root}/source/a/x.docx", [self.SECOND])
-        _code, out = support.run("tr-run", root, f"{root}/source/a/X.docx",
-                                 f"{root}/source/a/x.docx", mock=self.mock)
+        code, out = support.run("tr-run", root, f"{root}/source/a/X.docx",
+                                f"{root}/source/a/x.docx", mock=self.mock)
+        self.assertEqual(code, 1, out)
         self.assertEqual(out.count("FAILED"), 2, out)
         self.assertIn("translated: 0", out)
         self.assertEqual(os.listdir(f"{root}/translated"), [])
