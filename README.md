@@ -86,9 +86,13 @@ scan worth re-reading.
 **A translation memory that knows when it is stale.** Segments are keyed on
 direction, model, prompt version *and the glossary terms that applied to
 that segment* — so correcting one term retranslates the segments containing
-it and leaves the rest cached. Deliverables record which model and prompt
-produced them, because "output newer than source" answers whether a file was
-edited, not whether it is still correct.
+it and leaves the rest cached. Rows are finished again when read, so a fix
+to number conversion reaches work already done. Deliverables record
+everything that made them — source and OCR layer hashes, glossary,
+references, model, prompt and drafting code — and are drafted again when any
+of it changes, because "output newer than source" answers whether a file was
+edited, not whether it is still correct. One a translator has edited is
+never overwritten.
 
 **Checks that run no model.** `tr-lint` catches what a language model is
 structurally worst at noticing: a number present in the source and absent

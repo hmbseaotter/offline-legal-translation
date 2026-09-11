@@ -2,6 +2,7 @@
 Audit 2026-09-10: P-1."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
+import calendar
 import os
 import unittest
 
@@ -85,6 +86,10 @@ class ThroughTrRun(unittest.TestCase):
                            "path\tmodel\tprompt_version\twritten\n"
                            "a/s1.docx\tgams3:q8\tv6\t2026-09-01T10:00:00Z\n"
                            "a/s1.txt\tgams3:q8\tv6\t2026-09-01T10:01:00Z\n")
+        # Saved when that row says it was written, as tr-run would have left
+        # it: a later time reads as a translator's edit, which is kept.
+        stamp = calendar.timegm((2026, 9, 1, 10, 1, 0))
+        os.utime(f"{root}/translated/a/s1.docx", (stamp, stamp))
         _code, out = support.run("tr-status", root)
         self.assertIn("WRONG FILE", out)
 
@@ -96,7 +101,7 @@ class ThroughTrRun(unittest.TestCase):
         self.assertEqual(support.read_docx(f"{root}/translated/a/s1.txt.docx"),
                          [f"<<{self.SECOND}>>"])
         with open(f"{root}/work/deliverables.tsv", encoding="utf-8") as fh:
-            self.assertEqual(fh.readline().rstrip("\n").split("\t")[-1], "output")
+            self.assertIn("output", fh.readline().rstrip("\n").split("\t"))
         _code, out = support.run("tr-status", root)
         self.assertNotIn("WRONG FILE", out)
 

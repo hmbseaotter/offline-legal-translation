@@ -7,9 +7,13 @@ trlib.target_names() accounts for: TR_SUFFIX, the formats whose deliverable
 is a .docx (a scanned PDF cannot be regenerated as a PDF), and files in one
 folder that would otherwise deliver under one name.
 
+A deliverable is stale when anything that made it has changed since tr-run
+wrote it, as work/deliverables.tsv records. trlib.deliverable_plan() decides
+that, for tr-run as well as here.
+
 Usage:  tr-status [--missing]      # --missing prints bare paths only
 """
-import os, sys, time
+import os, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import trlib
@@ -39,31 +43,28 @@ def main():
     # report before target_name() accounted for them.
     want = os.environ.get("TR_SRC", "sl")
     in_scope = trlib.manifest_paths(want)
-    held = 0
+    held_back = 0
     if in_scope is not None:
         keep = set(in_scope)
-        held = len(src) - len(src & keep)
+        held_back = len(src) - len(src & keep)
         src &= keep
 
-    # Named against every file in source/, as tr-run names them, so the name
-    # written and the name looked for agree.
     names, clashes = trlib.target_names(src_all)
-    clashing = {rel for group in clashes for rel in group}
-    writers = trlib.deliverable_writers()
-    done, missing, stale, held = [], [], [], []
+    plan = trlib.deliverable_plan(sorted(src), TGT)
+    done, missing, stale, held, edited = [], [], [], [], []
     for rel in sorted(src):
-        if rel in clashing:
-            continue
-        t = names[rel]
-        tp, sp = os.path.join(TGT, t), os.path.join(SRC, rel)
-        if t not in tgt:
+        name, action, detail = plan[rel]
+        if action == "draft":
             missing.append(rel)
-        elif writers.get(t.casefold(), rel) != rel:
-            held.append(f"{rel}   ({t} holds {writers[t.casefold()]})")
-        elif os.path.getmtime(tp) < os.path.getmtime(sp):
-            stale.append(rel)
-        else:
+        elif action == "redo":
+            stale.append(f"{rel}   ({detail})")
+        elif action == "held":
+            held.append(f"{rel}   ({name} holds {detail})")
+        elif action == "edited":
+            edited.append(f"{rel}   ({detail})")
+        elif action == "current":
             done.append(rel)
+    clashing = {rel for group in clashes for rel in group}
 
     if bare:
         for r in missing:
@@ -82,11 +83,15 @@ def main():
         print(f"source:     {len(src)} files   (no inventory - run tr-inventory)")
     else:
         print(f"source:     {len(src)} files in {want}"
-              f"   ({held} other-language held back by triage)")
+              f"   ({held_back} other-language held back by triage)")
     print(f"translated: {len(done)}")
     print(f"missing:    {len(missing)}")
     if stale:
-        print(f"stale:      {len(stale)}  (source newer than translation)")
+        print(f"stale:      {len(stale)}  (something that made it has changed; "
+              f"tr-run drafts it again)")
+    if edited:
+        print(f"edited:     {len(edited)}  (changed after drafting, and stale; "
+              f"tr-run keeps it until it is moved aside)")
     if held:
         print(f"wrong file: {len(held)}  (the deliverable holds another "
               f"source's translation)")
@@ -97,7 +102,7 @@ def main():
         print(f"orphaned:   {len(orphans)}  (in translated/, no matching source)")
     print()
     for label, items in (("MISSING", missing), ("STALE", stale),
-                         ("WRONG FILE", held),
+                         ("EDITED", edited), ("WRONG FILE", held),
                          ("CLASHING", [", ".join(g) for g in clashes]),
                          ("ORPHANED", orphans)):
         if items:

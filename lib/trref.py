@@ -729,6 +729,28 @@ def load_references():
     return {pair: dict(sources) for pair, sources in out.items()}
 
 
+def digest(direction):
+    """What reuse reads for this direction's language pair, as one hash:
+    every kept pair with its tags, and each document's signature and date.
+    tr-run records it with each deliverable, so a file drafted before tr-ref
+    kept a sentence, or before a reference changed, is drafted again. "-"
+    when there is no store."""
+    if not os.path.exists(store_path()):
+        return "-"
+    db = sqlite3.connect(store_path(), timeout=60)
+    s, t = trlib.split_direction(direction)
+    h = hashlib.sha256()
+    for row in kept(db, direction, offered=True):
+        h.update(repr(row).encode())
+    dated = "date" in _columns(db, "docs")
+    for row in db.execute("SELECT doc, signature" + (", date" if dated else "")
+                          + " FROM docs WHERE direction = ? ORDER BY doc",
+                          (f"{s}-{trlib.base_lang(t)}",)):
+        h.update(repr(row).encode())
+    db.close()
+    return h.hexdigest()[:16]
+
+
 def rendering_key(text):
     """What renderings share when they differ only in punctuation.
 

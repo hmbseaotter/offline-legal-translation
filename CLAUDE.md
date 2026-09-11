@@ -260,6 +260,16 @@ Do not change these without discussing with the operator first.
    string bumped by hand, and a forgotten bump reused stale translations.
    The two v6 texts still map to `v6`, so memory written under that name
    stays valid; `TR_PROMPT_VERSION` remains as an override.
+   The key does not cover how a reply is finished, so a row is finished
+   again whenever it is read (`trlib.refinish()`) and stored back when that
+   changes it: a fix to number conversion reaches rows written before it.
+   A deliverable is current only while nothing that made it has changed.
+   `work/deliverables.tsv` records the hashes of the source and of a PDF's
+   text layer, the glossary signature, the reference digest, the model, the
+   prompt version and a hash of the drafting code, and
+   `trlib.deliverable_plan()` drafts the file again when any of them
+   differs. A deliverable changed after `tr-run` wrote it is never
+   overwritten.
 8. **`tr-lint` runs no model.** It must stay deterministic and fast.
 9. **Projects are isolated.** Each has its own `work/tm.sqlite`. Translation
    memory must never be shared across matters — different clients, different

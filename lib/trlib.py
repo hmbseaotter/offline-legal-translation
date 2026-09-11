@@ -4,7 +4,7 @@ Nothing here talks to the network except ollama_translate(), which speaks
 only to http://127.0.0.1:11434 (the local Ollama daemon).
 """
 import os, re, json, sqlite3, hashlib, urllib.request, sys, time, tempfile
-import collections
+import calendar, collections
 
 # ------------------------------------------------------------ interpreter
 
@@ -258,26 +258,200 @@ def source_files():
     return sorted(out)
 
 
-def deliverable_writers():
-    """{deliverable name, casefolded: the source file that last wrote it},
-    from work/deliverables.tsv, whose rows tr-run appends in the order it
-    writes them. A row from before the output column is read as written under
-    target_name(), which is where every file was written then."""
+def ocr_layer(rel):
+    """The text layer tr-pdf makes for source/<rel>: the path without its
+    extension, / written __, under work/ocr/. tr-pdf names it the same way."""
+    return path("work", "ocr", os.path.splitext(rel)[0].replace(os.sep, "__") + ".txt")
+
+
+# What work/deliverables.tsv records about each deliverable -- everything
+# that shapes it:
+#
+#   path, output            the source file, and its deliverable's name
+#   model, prompt_version   what drafted its segments
+#   source, layer           hashes of the source file and, for a PDF, of the
+#                           text layer it was translated from
+#   glossary                the glossary and the non-translatable patterns
+#   references              what tr-ref kept for the language pair
+#   drafting                the kit code that turns segments into a file
+#   written, delivered      when tr-run wrote it, and a hash of what it wrote
+#
+# deliverable_plan() drafts a file again when any of these has changed. The
+# test was "output newer than source, by the same model and prompt", and a
+# pinned glossary term, a reference kept later, an OCR layer read again and a
+# fix to how drafts are finished each left a delivered file current by it,
+# so none of them reached work already delivered.
+DELIVERABLE_COLUMNS = ("path", "model", "prompt_version", "written", "output",
+                       "source", "layer", "glossary", "references", "drafting",
+                       "delivered")
+# The kit files that turn memory rows and references into a deliverable. The
+# prompt is not one of them: prompt_version says when this pair's prompt
+# changed, and another pair's rules do not reach it.
+DRAFTING_FILES = ("lib/trlib.py", "lib/trref.py", "bin/tr-docx", "bin/tr-txt",
+                  "bin/tr-xlsx", "bin/tr-pdf", "bin/tr-ocrtext",
+                  "glossary/nontranslatable.txt")
+
+
+def _file_digest(p):
+    """A short hash of a file's contents, or "" when there is no file."""
+    if not os.path.exists(p):
+        return ""
+    h = hashlib.sha256()
+    with open(p, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def glossary_signature():
+    """The glossary and the non-translatable patterns in force, as one hash."""
+    state = (load_glossary(), [p.pattern for p in nontranslatables()])
+    return hashlib.sha256(repr(state).encode()).hexdigest()[:16]
+
+
+def drafting_version():
+    """The kit code that shapes a deliverable, as one hash."""
+    h = hashlib.sha256()
+    for rel in DRAFTING_FILES:
+        h.update(f"{rel}\x00{_file_digest(os.path.join(KIT_DIR, rel))}\x00".encode())
+    return h.hexdigest()[:16]
+
+
+def _deliverable_rows():
+    """work/deliverables.tsv as dicts, in the order tr-run wrote them. A
+    column a row predates is empty."""
     tsv = path("work", "deliverables.tsv")
-    out = {}
     if not os.path.exists(tsv):
-        return out
+        return []
     with open(tsv, encoding="utf-8") as fh:
         head = fh.readline().rstrip("\n").split("\t")
-        col = head.index("output") if "output" in head else None
-        for ln in fh:
-            cols = ln.rstrip("\n").split("\t")
-            if not cols[0]:
-                continue
-            name = cols[col] if col is not None and len(cols) > col and cols[col] \
-                else target_name(cols[0])
-            out[name.casefold()] = cols[0]
+        return [dict(zip(head, cols + [""] * (len(head) - len(cols))))
+                for cols in (ln.rstrip("\n").split("\t") for ln in fh) if cols[0]]
+
+
+def deliverable_writers():
+    """{deliverable name, casefolded: the source file that last wrote it}. A
+    row from before the output column is read as written under target_name(),
+    which is where every file was written then."""
+    return {(row.get("output") or target_name(row["path"])).casefold(): row["path"]
+            for row in _deliverable_rows()}
+
+
+class _Now:
+    """What would make a deliverable now, in DELIVERABLE_COLUMNS' terms. The
+    parts every file shares are worked out once."""
+
+    def __init__(self):
+        import trref
+        self.shared = {
+            "model": MODEL or "(none)", "prompt_version": PROMPT_VERSION,
+            "glossary": glossary_signature(), "drafting": drafting_version(),
+            "references": trref.digest(
+                f"{os.environ.get('TR_SRC', 'sl')}-{_env_target()}")}
+
+    def of(self, rel):
+        return dict(self.shared, source=_file_digest(path("source", rel)),
+                    layer=(_file_digest(ocr_layer(rel))
+                           if rel.lower().endswith(".pdf") else "-"))
+
+
+_CHANGED = {"model": "the model", "prompt_version": "the prompt",
+            "source": "the source file", "layer": "the text layer",
+            "glossary": "the glossary", "references": "the reference translations",
+            "drafting": "the kit's drafting code"}
+
+
+def _changes(row, now):
+    """What has changed since row's deliverable was written, in words."""
+    if not row.get("source"):
+        return ["written before tr-run recorded what makes a deliverable"]
+    out = []
+    for key, what in _CHANGED.items():
+        if row.get(key, "") != now[key]:
+            was = (f" ({row.get(key) or 'none'} -> {now[key]})"
+                   if key in ("model", "prompt_version") else "")
+            out.append(f"{what} changed{was}")
     return out
+
+
+def _edited(out, row):
+    """Has this deliverable changed since tr-run wrote it? By its hash where
+    the row records one; for a row from before, by whether it was saved more
+    than two minutes after the row was written."""
+    if not row:
+        return False
+    if row.get("delivered"):
+        return _file_digest(out) != row["delivered"]
+    try:
+        written = calendar.timegm(time.strptime(row.get("written", ""),
+                                                "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return False
+    return os.path.getmtime(out) > written + 120
+
+
+def deliverable_plan(rels, outdir=None):
+    """{rel: (deliverable name, action, detail)} for source files relative to
+    source/: what tr-run does with each, and what tr-status reports.
+
+      draft    no deliverable yet
+      current  nothing that made the deliverable has changed
+      redo     detail says what has
+      held     the deliverable holds the translation of another source file,
+               named in detail
+      edited   a redo, or a held file, whose deliverable has changed since
+               tr-run wrote it -- a translator's corrections, most likely. It
+               is never overwritten; moved aside, it is drafted again
+      clash    another source file delivers under the same name (detail)
+    """
+    outdir = outdir or path("translated")
+    names, clashes = target_names(sorted(set(source_files()) | set(rels)))
+    clash = {r: group for group in clashes for r in group}
+    rows = {row["path"]: row for row in _deliverable_rows()}
+    writers = deliverable_writers()
+    now = _Now()
+    plan = {}
+    for rel in rels:
+        name = names[rel]
+        out = os.path.join(outdir, name)
+        by = writers.get(name.casefold())
+        if rel in clash:
+            action, detail = "clash", ", ".join(r for r in clash[rel] if r != rel)
+        elif not os.path.exists(out):
+            action, detail = "draft", ""
+        elif by not in (None, rel):
+            action, detail = "held", by
+            if _edited(out, rows.get(by)):
+                action, detail = "edited", f"it holds the translation of {by}"
+        else:
+            row = rows.get(rel)
+            reasons = (_changes(row, now.of(rel)) if row
+                       else ["nothing records what made it"])
+            action, detail = ("current", "") if not reasons else \
+                ("edited" if _edited(out, row) else "redo", "; ".join(reasons))
+        plan[rel] = (name, action, detail)
+    return plan
+
+
+def record_deliverable(rel, name, outdir=None):
+    """Write rel's row in work/deliverables.tsv for the deliverable tr-run has
+    just written: what made it, and a hash of it. The row moves to the end,
+    so the file stays in the order deliverables were written."""
+    outdir = outdir or path("translated")
+    row = dict(_Now().of(rel), path=rel, output=name,
+               written=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               delivered=_file_digest(os.path.join(outdir, name)))
+    rows = [r for r in _deliverable_rows() if r["path"] != rel] + [row]
+    tsv = path("work", "deliverables.tsv")
+    os.makedirs(os.path.dirname(tsv), exist_ok=True)
+    # Written beside itself and renamed, inside the container: a temporary
+    # file elsewhere would put paths -- which carry party names -- on the
+    # unencrypted root.
+    with open(tsv + ".tmp", "w", encoding="utf-8") as fh:
+        fh.write("\t".join(DELIVERABLE_COLUMNS) + "\n")
+        for r in rows:
+            fh.write("\t".join(r.get(k, "") for k in DELIVERABLE_COLUMNS) + "\n")
+    os.replace(tsv + ".tmp", tsv)
 
 def require_root():
     """Fail loudly rather than writing into the wrong project.
@@ -1623,6 +1797,17 @@ def _rewrite_numbers(tgt, numbers, spell, guarded):
     return rx.sub(swap, tgt)
 
 
+def _restore_references(tgt, numbers):
+    """tgt with each of numbers -- a reference or a time everywhere the source
+    has it -- put back where the draft writes it as a decimal: 5,10 for
+    Section 5.10, 10,30 for 10.30 Uhr. The source has no such quantity, so the
+    comma can only be a rewrite of the reference, made by the model or by
+    this kit before it recognised references. Memory rows written then are
+    finished again when read, and this is what repairs them."""
+    commas = {n.replace(".", ","): n for n in numbers if _AMBIGUOUS_POINT.fullmatch(n)}
+    return _rewrite_numbers(tgt, set(commas), lambda comma, _m: commas[comma], False)
+
+
 def fix_numeric_format(src, tgt, src_lang, tgt_lang):
     """Rewrite amounts the model left in the source's number format.
 
@@ -1683,8 +1868,9 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
         subs[m.group(0)] = _regroup(digits, thou_out) + dec_out + m.group(2)
     # A number that is a reference or a time anywhere in the source is not
     # rewritten anywhere in the draft, which may have moved it.
-    return _rewrite_numbers(tgt, set(subs) - kept,
-                            lambda number, _m: subs[number], guarded)
+    tgt = _rewrite_numbers(tgt, set(subs) - kept,
+                           lambda number, _m: subs[number], guarded)
+    return _restore_references(tgt, kept - set(subs)) if guarded else tgt
 
 
 _CURRENCY_BEFORE = re.compile(rf"(?:{_CURRENCY})\s*$")
@@ -1716,7 +1902,8 @@ def _fix_swiss_numbers(src, tgt):
         money = bool(_CURRENCY_BEFORE.search(tgt, 0, m.start())
                      or _CURRENCY_AFTER.match(tgt, m.end())) or number not in bare
         return _swiss_number(number, money)
-    return _rewrite_numbers(tgt, found - kept, spell, guarded=True)
+    return _restore_references(_rewrite_numbers(tgt, found - kept, spell, guarded=True),
+                               kept - found)
 
 
 _SPACED_GROUPS = re.compile(r"(?<![\d.,'’\u00a0])(\d{1,3})((?: \d{3})+)(?!\d)")
@@ -1755,6 +1942,23 @@ def finish_draft(src, tgt, src_lang, tgt_lang):
     if tgt and tgt_lang == "de-CH":
         tgt = swiss_spelling(src, _whole_francs(_swiss_spacing(tgt)))
     return tgt
+
+
+def refinish(src, cached, src_lang, tgt_lang, gloss_sig):
+    """A memory row, finished as a draft made today would be.
+
+    The memory's key covers the model, the prompt and the glossary, not how a
+    reply is finished, so a row written before a finishing fix came back
+    without it: a sentence-final 12.450,00 left in an English draft, a Swiss
+    Fr. 20.– that could break across a line, a Section 5,10. Every row read is
+    finished again, and stored back when that changes it, so the memory keeps
+    holding what the deliverables show. finish_draft() changes nothing in a
+    row that is already finished.
+    """
+    done = finish_draft(src, cached, src_lang, tgt_lang)
+    if done != cached:
+        tm_put(src, done, f"{src_lang}-{tgt_lang}", gloss_sig)
+    return done
 
 
 def decimal_rewrites(src, tgt, src_lang, tgt_lang):
@@ -1889,7 +2093,7 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     gb = glossary_block(text, gloss or [])
     cached = tm_get(text, f"{src_lang}-{tgt_lang}", gb)
     if cached is not None:
-        return cached
+        return refinish(text, cached, src_lang, tgt_lang, gb)
     system = build_prompt(src_lang, tgt_lang, gb)
     last, firm, fallback = None, False, None
     for attempt in range(retries):
@@ -2049,9 +2253,10 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
         if ref is not None:
             out[i] = ref
             continue
-        cached = tm_get(t, direction, glossary_block(t, gloss or []))
+        gb = glossary_block(t, gloss or [])
+        cached = tm_get(t, direction, gb)
         if cached is not None:
-            out[i] = cached
+            out[i] = refinish(t, cached, src_lang, tgt_lang, gb)
             continue
         pending.append(i)
 

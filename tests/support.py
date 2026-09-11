@@ -41,6 +41,20 @@ sys.path.insert(0, os.path.join(KIT, "lib"))
 
 MODELS = ["gams3:q8", "eurollm9b-2512:q8"]
 
+# Invented Slovene without č, š or ž, which WinAnsi lacks, so write_pdf() can
+# carry it: over sixty words, enough for tr-pdf to take a PDF of it as
+# born-digital and for language detection to answer.
+SLOVENE_LINES = [
+    "Pogodba je bila podpisana v Kranju med prodajalcem in kupcem.",
+    "Kupec je kupnino poravnal v roku, ki ga je dolocila pogodba.",
+    "Prodajalec je izrocil kljuce stanovanja na dan podpisa pogodbe.",
+    "Stranki sta se dogovorili, da stroske overitve nosi kupec sam.",
+    "Vse spore bo resevalo stvarno pristojno sodisce v Ljubljani.",
+    "Pogodba je sestavljena v dveh enakih izvodih za vsako stranko.",
+    "Kupec potrjuje, da si je stanovanje pred podpisom ogledal.",
+    "Prodajalec jamci, da na stanovanju ni bremen ali pravic tretjih.",
+    "Stranki sta pogodbo prebrali in jo v znak strinjanja podpisali."]
+
 
 def project(name, src, tgt):
     """A project directory under the test root, with its pair in project.conf."""

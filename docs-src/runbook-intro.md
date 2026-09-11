@@ -231,10 +231,20 @@ added to `source/` after the last `tr-inventory` is invisible to it. Re-run
 step 3 whenever you add anything. `tr-run` now names any file it finds on
 disk that the manifest has never seen, rather than leaving it out silently.
 
-Resumable at two levels: it skips files already delivered, and within a file
-every segment already in the memory is reused. Interrupting it costs at most
-one segment. It re-translates a file whose source is newer than its output,
-or whose output was produced by a different model or a superseded prompt.
+Resumable at two levels: it skips a file whose deliverable is current, and
+within a file every segment already in the memory is reused. Interrupting it
+costs at most one segment. A deliverable is drafted again when anything that
+made it has changed since it was written — the source, a PDF's text layer,
+the glossary, the reference translations, the model, the prompt or the
+kit's drafting code — and the `redo` line says which; `tr-status` lists the
+same. A deliverable changed after `tr-run` wrote it, such as one a
+translator corrected in place, is never overwritten: it is listed as
+`kept`, and drafted again once it is moved aside.
+
+**After updating the kit** nothing needs deleting. Run `tr-ref` where the
+project has references and step 4 where it has PDFs, then `tr-run` and
+`tr-lint`: every deliverable is drafted again once, from the memory, with
+today's conversions applied to rows written before them.
 
 **9. Get the reviewer's worklist.**
 
@@ -260,8 +270,9 @@ and pinning them steers every draft instead of correcting it afterwards:
 
     tr-terms --reference --pin-all
 
-**11. Re-run.** Pinning a term invalidates only the segments containing it,
-so this is minutes, not hours:
+**11. Re-run.** A pinned term changes the glossary every deliverable
+records, so `tr-run` drafts each file again, but only the segments
+containing the term go back to the model — minutes, not hours:
 
     tr-run
     tr-lint
