@@ -66,8 +66,9 @@ Federal Chancellery's rules: `12 450,00` with a non-breaking space,
 `CHF 1250.50` and `Fr. 20.–` for money, `14.30`, and ss for ß — except in a
 word the source has too, such as a name. `de-AT` is recognised — `tr-ref`
 files references in it and `tr-terms --reference` reads them — but `tr-run`
-refuses to draft into it until its conventions are settled. `TR_SRC` never
-takes a variant; a Swiss German source is `de`.
+refuses to draft into it until its conventions are settled. `TR_SRC` is
+`sl` or `en`: a German source is refused for now, because triage cannot
+detect German and German→English has no rules of its own.
 
 **2. Copy the client's drop into `source/`, preserving its folder
 structure.** Filenames and the shape of the tree are reproduced in
@@ -109,9 +110,9 @@ exits 1. References stay in this project; nothing reads another project's.
 
 The suffix may be `_English`, `_German`, `_Slovene` or `_EN`, `_DE`, `_SL`,
 in any case, and the two files may be different formats. It names a
-language, not which side was the original, so the same pair serves
-English→German and German→English work. A file with no suffix is listed
-and skipped, never guessed.
+language, not which side was the original, so the same pair would serve
+German→English work too, once a German source is supported. A file with no
+suffix is listed and skipped, never guessed.
 
 German takes a variant after a hyphen — `_German-CH`, `_German-AT`, and
 `_German` or `_German-DE` for Germany — so one original beside a Germany and

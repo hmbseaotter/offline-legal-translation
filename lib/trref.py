@@ -21,8 +21,8 @@ or _German-DE for Germany. One English original can sit beside a Germany and
 a Swiss translation, and each makes a pair of its own.
 
 The suffix names a language, not a role. Which side is the source is the
-project's TR_SRC, so the same pair serves an English->German matter and a
-German->English one. A file with no suffix is listed and skipped: guessing its
+project's TR_SRC, so the same pair would serve a German->English matter as
+well as an English->German one, once a German source is supported. A file with no suffix is listed and skipped: guessing its
 language would put it on the wrong side of a pair without a word.
 
 WHY ONLY THE PROJECT'S OWN FOLDER
@@ -102,8 +102,7 @@ other. Where the project's own variant has no reference for a sentence, the
 other variant's renderings are offered, tagged with it -- [[…]] (de-CH) -- and
 never reused. Offered to a Swiss project, a Germany rendering is first spelled
 ss for ß, as a Swiss draft would be. The variant matters on the target side
-only; a German->English project reuses a pair whatever German its source is
-written in.
+only; a German source is refused for now (trlib.project_pair).
 """
 import collections
 import datetime
@@ -645,8 +644,7 @@ def reuse_direction(direction, variant):
     the target and not Germany's, the pair is reused only in its variant's
     own direction, en-de-CH -- the direction tr-run translates in when
     TR_TGT is de-CH. Every other pair is reused in the direction it is stored
-    under, so a German->English project takes a sentence whichever German its
-    source was written in.
+    under.
     """
     s, t = trlib.split_direction(direction)
     return f"{s}-{variant}" if variant and trlib.base_lang(variant) == t \

@@ -524,9 +524,10 @@ NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
 # would file the same work under a new direction and find none of what is
 # already there.
 #
-# Only the target takes a variant. tr-inventory labels every German file de,
-# and tr-run compares that label with TR_SRC as text, so a TR_SRC of de-CH
-# would hold back the whole drop.
+# Only the target takes a variant. A German source is refused altogether for
+# now (project_pair): language detection has no German class, so tr-inventory
+# files German documents under another language.
+SOURCES = ("sl", "en")
 VARIANTS = {"de": ("DE", "AT", "CH")}      # the first is what the bare code means
 
 # The variants a draft can be made in, beyond each language's first. Swiss
@@ -580,7 +581,16 @@ def project_pair(src=None, tgt=None):
     tgt = os.environ.get("TR_TGT", "en") if tgt is None else tgt
     if not re.fullmatch(r"[a-z]{2}", src):
         sys.exit(f"TR_SRC is {src!r}. Name the source language alone - "
-                 f"{', '.join(LANG)}. Only TR_TGT takes a variant, such as de-CH.")
+                 f"{', '.join(SOURCES)}. Only TR_TGT takes a variant, such as de-CH.")
+    if src == "de":
+        sys.exit("TR_SRC is de, and a German source is not supported yet. Language "
+                 "detection has no German, so tr-inventory would file German "
+                 "documents under English or Croatian and tr-run would find nothing "
+                 "to translate; and German->English has no prompt rules or "
+                 f"conversions of its own. Sources: {', '.join(SOURCES)}.")
+    if src not in SOURCES:
+        sys.exit(f"TR_SRC is {src}, which is no source language this kit knows. "
+                 f"Sources: {', '.join(SOURCES)}.")
     t = lang_code(tgt)
     if t is None:
         variants = ", ".join(f"{lang}-{r}" for lang, rs in VARIANTS.items()
