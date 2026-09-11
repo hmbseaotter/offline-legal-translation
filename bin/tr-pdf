@@ -25,6 +25,20 @@ OCRDIR="$TR_ROOT/work/ocr"
 LANGS="${TR_OCR_LANGS:-slv+eng}"
 mkdir -p "$OCRDIR"
 
+# Where everything this run's tools write while they work goes: ocrmypdf's
+# picture of every page and Tesseract's hOCR text, Ghostscript's scratch, and
+# whatever tr-txt's libraries need. They write where TMPDIR points, which is
+# /tmp unless set -- tmpfs on this machine, so RAM, so swap, and the swapfile
+# is plain ext4 on the unencrypted root. tr-ocrtext's own renders already
+# stayed inside the container (trlib.case_tmpdir); ocrmypdf's did not, 25
+# files for a one-page scan. A directory of this run's own, inside the
+# container, removed however tr-pdf ends short of a kill -9.
+mkdir -p "$TR_ROOT/work/tmp"
+TMPDIR="$(mktemp -d "$TR_ROOT/work/tmp/trpdf-XXXXXXXX")"
+export TMPDIR
+trap 'rm -rf "$TMPDIR"' EXIT
+trap 'exit 130' INT TERM
+
 ONLY=0; [[ "${1:-}" == "--ocr-only" ]] && { ONLY=1; shift; }
 IN="$1"; OUT="${2:-}"
 # Cache key: the path relative to source/, flattened, not the basename.
