@@ -1649,6 +1649,26 @@ def compare_numbers(src, tgt, src_lang=None, tgt_lang=None):
     check reports, and what the invention retry and reference alignment test."""
     return number_gap(norm_nums(src, src_lang), norm_nums(tgt, tgt_lang))
 
+
+def nontranslatable_kept(frag, tgt, src_lang, tgt_lang):
+    """Did a fragment the source must keep reach tgt? Verbatim, or converted
+    as localize() converts it; into Swiss German also in the forms its
+    conventions allow -- CHF written Fr., and an amount whose value and
+    currency the draft keeps however it spells them: 12,450.00 CHF as
+    CHF 12 450.00 or Fr. 12 450.–."""
+    if frag in tgt:
+        return True
+    want = localize(frag, src_lang, tgt_lang)
+    if want != frag and want in tgt:
+        return True
+    if tgt_lang != "de-CH":
+        return False
+    francs = lambda text: re.sub(r"\bCHF\b", "Fr.", text)   # noqa: E731
+    if francs(frag) in francs(tgt):
+        return True
+    return (want != frag and not compare_numbers(frag, tgt, src_lang, tgt_lang)[0]
+            and all(francs(c) in francs(tgt) for c in re.findall(_CURRENCY, frag)))
+
 # ---------------------------------------------------------------- glossary
 
 def load_glossary():
@@ -2117,34 +2137,65 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
 
 _CURRENCY_BEFORE = re.compile(rf"(?:{_CURRENCY})\s*$")
 _CURRENCY_AFTER = re.compile(rf"\s*(?:{_CURRENCY})")
+# The other end of a range with the currency beside it: the 2,000.00 of
+# "CHF 1,000.00 to 2,000.00", and the 1,000.00 of "1,000.00 to 2,000.00 CHF".
+_RANGE_JOIN = r"(?:[–-]|to|and|or|bis|und|oder)"
+_CURRENCY_RANGE_BEFORE = re.compile(
+    rf"(?:{_CURRENCY})\s*\d[\d.,'’\u00a0 ]*?\s*{_RANGE_JOIN}\s*$")
+_CURRENCY_RANGE_AFTER = re.compile(
+    rf"\s*{_RANGE_JOIN}\s*\d[\d.,'’\u00a0 ]*?\s*(?:{_CURRENCY})")
+
+
+def _money_where(text, start, end):
+    """Is the number at text[start:end] money where it stands: a currency
+    beside it, or beside the other end of its range, and no percent?"""
+    if _QUANTITY_AFTER.match(text, end):
+        return False
+    before = text[max(0, start - 80):start]
+    return bool(_CURRENCY_BEFORE.search(before) or _CURRENCY_AFTER.match(text, end)
+                or _CURRENCY_RANGE_BEFORE.search(before)
+                or _CURRENCY_RANGE_AFTER.match(text, end))
 
 
 def _fix_swiss_numbers(src, tgt):
     """fix_numeric_format() for English into Swiss German.
 
-    Driven from the source the same way, and guarded the same way. Whether a
-    number is money is read where it stands, from the currency beside it: CHF 12,450.00 is rewritten 12 450.00, and a bare 3.25 becomes 3,25.
-    The currency stays where the model put it; the prompt asks for it first,
-    and moving words within a sentence is not arithmetic.
+    Driven from the source the same way, and guarded the same way. Each
+    number the source has is rewritten where the draft writes it the English
+    way, 12,450.00, or Germany's, 12.450,00: Switzerland writes neither.
+    Whether it is money is read where it stands in the draft, from a currency
+    beside it or beside the other end of its range: CHF 12,450.00 becomes
+    CHF 12 450.00, the 2,000.00 of "CHF 1,000.00 to 2,000.00" is money too,
+    and a bare 3.25 becomes 3,25. The currency stays where the model put it;
+    the prompt asks for it first, and moving words within a sentence is not
+    arithmetic.
     """
     found, kept, bare = set(), set(), set()
-    for m in _EN_AMOUNT.finditer(src):
-        if _protected(src, m.start(), m.end()):
-            kept.add(m.group(0))
-            continue
-        found.add(m.group(0))
-        if not (_CURRENCY_BEFORE.search(src, 0, m.start())
-                or _CURRENCY_AFTER.match(src, m.end())):
-            bare.add(m.group(0))
+    for pat in (_EN_AMOUNT, _EN_GROUPED):
+        for m in pat.finditer(src):
+            if _protected(src, m.start(), m.end()):
+                kept.add(m.group(0))
+                continue
+            found.add(m.group(0))
+            if not _money_where(src, m.start(), m.end()):
+                bare.add(m.group(0))
+    # Each number by the spellings it may have in the draft: its own, and
+    # Germany's where that is not a spelling the source has as well.
+    english = {n: n for n in found}
+    for n in found:
+        german = _en_number_to_sl(n)
+        if german and german not in found | kept:
+            english.setdefault(german, n)
 
     def spell(number, m):
+        n = english[number]
         # Money where the draft puts a currency beside it; where it puts
         # none, money if the source never wrote it bare. "Interest of 2.50
         # on CHF 2.50" has one of each.
-        money = bool(_CURRENCY_BEFORE.search(tgt, 0, m.start())
-                     or _CURRENCY_AFTER.match(tgt, m.end())) or number not in bare
-        return _swiss_number(number, money)
-    return _restore_references(_rewrite_numbers(tgt, found - kept, spell, guarded=True),
+        money = _money_where(tgt, m.start(), m.end()) or (
+            n not in bare and not _QUANTITY_AFTER.match(tgt, m.end()))
+        return _swiss_number(n, money)
+    return _restore_references(_rewrite_numbers(tgt, set(english), spell, guarded=True),
                                kept - found)
 
 
@@ -2163,26 +2214,78 @@ def _swiss_spacing(text):
     return _SPACED_GROUPS.sub(nbsp, text)
 
 
+# A time in English: 14:30, or 2:30 p.m. and 2:30pm with the marker after it.
+_COLON_TIME = re.compile(r"(?<![\d:.,])(\d{1,2}):([0-5]\d)(?![\d:])")
+_MARKER_AFTER = re.compile(r"\s*([ap])\.?\s?m\b\.?", re.I)
+# A time in a German draft, where a spaced "am" is German: "um 12:00 am
+# Montag" is on Monday. An English marker the model left in is written a.m.
+# or p.m., joined as in 2:30pm, or spaced as pm or AM.
+_DRAFT_TIME = re.compile(
+    r"(?<![\d:.,])(\d{1,2}):([0-5]\d)(?![\d:])"
+    r"(?P<marker>\s*[aApP]\.\s?[mM]\.|[aApP][mM]\b|\s+[pP][mM]\b|\s+AM\b)?")
+
+
+def _clock(hour, minute, marker=None):
+    """(hour, minute) on the 24-hour clock, or None if it is no time."""
+    h = int(hour)
+    if marker:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + (12 if marker in "pP" else 0)
+    return (h, minute) if h <= 23 else None
+
+
+def _swiss_times(src, tgt):
+    """The draft's times written 14:30 or 2:30 p.m., written as Switzerland
+    writes them: 14.30. Only a time the source has, by value, so a ratio in
+    the draft is left."""
+    times = set()
+    for m in _COLON_TIME.finditer(src):
+        after = _MARKER_AFTER.match(src, m.end())
+        times.add(_clock(m.group(1), m.group(2), after and after.group(1)))
+    times.discard(None)
+
+    def swap(m):
+        marker = m.group("marker")
+        twelve = marker and _clock(m.group(1), m.group(2), marker.strip()[0])
+        if twelve in times:
+            return f"{twelve[0]}.{twelve[1]}"
+        plain = _clock(m.group(1), m.group(2))
+        if plain in times:
+            return f"{plain[0]}.{plain[1]}{marker or ''}"
+        return m.group(0)
+    return _DRAFT_TIME.sub(swap, tgt) if times else tgt
+
+
+# A whole number of francs, however the draft writes it -- CHF 20.00,
+# 20.00 CHF, Fr. 20.-, Fr. 20.— -- is written Fr. 20.–, as localize() writes
+# it, so that both write one form. Not before a word of scale: CHF 20.00 Mio.
+# is left as it stands.
+_FRANCS = r"\d{1,3}(?:[ \u00a0]\d{3})+|\d+"
 _WHOLE_FRANCS = re.compile(
-    r"\bFr\.[ \u00a0]?(\d{1,3}(?:[ \u00a0]\d{3})*|\d+)\.\u2060?–")
+    r"\b(?:CHF\b|Fr\.)[ \u00a0]?(?P<a>" + _FRANCS + r")\.(?:00|\u2060?[–—-])(?!\d)"
+    r"(?![ \u00a0]*(?:Mio|Mrd|Mill|Tsd|Tausend))"
+    r"|(?<![\d.,'’])(?P<b>" + _FRANCS + r")\.(?:00|\u2060?[–—-])[ \u00a0]?(?:CHF\b|Fr\.)")
 
 
 def _whole_francs(text):
-    """Fr. 20.– held on one line: a no-break space after Fr., and a word
-    joiner before the dash. Without them LibreOffice set "Fr. 20." at the end
-    of a line and the dash at the start of the next; with the joiner alone it
-    left Fr. behind instead."""
-    return _WHOLE_FRANCS.sub(lambda m: f"Fr.{NBSP}{m.group(1)}.{WJ}–", text)
+    """Whole franc amounts as Fr. 20.–, held on one line: a no-break space
+    after Fr., and a word joiner before the dash. Without them LibreOffice set
+    "Fr. 20." at the end of a line and the dash at the start of the next; with
+    the joiner alone it left Fr. behind instead."""
+    return _WHOLE_FRANCS.sub(
+        lambda m: f"Fr.{NBSP}{m.group('a') or m.group('b')}.{WJ}–", text)
 
 
 def finish_draft(src, tgt, src_lang, tgt_lang):
     """A model reply made ready to store: its number format fixed and, in
-    Swiss German, its digit groups and whole franc amounts held together and
-    ß written ss. Every draft passes through here before it enters the
-    memory, so the memory holds what the deliverable shows."""
+    Swiss German, its times written 14.30, its digit groups and whole franc
+    amounts written the Swiss way and held together, and ß written ss. Every
+    draft passes through here before it enters the memory, so the memory
+    holds what the deliverable shows."""
     tgt = fix_numeric_format(src, tgt, src_lang, tgt_lang)
     if tgt and tgt_lang == "de-CH":
-        tgt = swiss_spelling(src, _whole_francs(_swiss_spacing(tgt)))
+        tgt = swiss_spelling(src, _whole_francs(_swiss_spacing(_swiss_times(src, tgt))))
     return tgt
 
 

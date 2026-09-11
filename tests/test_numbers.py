@@ -1,5 +1,5 @@
 """Dates, amounts and times: conversion, comparison, and choosing between
-replies. Audit 2026-09-10: H-5, H-6, H-7, M-1, M-3."""
+replies. Audit 2026-09-10: H-5, H-6, H-7, M-1, M-2, M-3."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import unittest
@@ -281,6 +281,79 @@ class RetrySelection(unittest.TestCase):
         self.assertEqual(trlib.ollama_translate_many(["2:30pm", "EUR 20"], "en", "de"),
                          ["14:30", "EUR 20"])
         self.assertEqual(len(self.mock.requests()), before)
+
+
+class SwissDrafts(unittest.TestCase):
+    """What finish_draft() makes of a Swiss draft written the way Germany
+    writes, or left in English."""
+
+    def finish(self, src, tgt):
+        return trlib.finish_draft(src, tgt, "en", "de-CH")
+
+    def test_germany_format_amounts_and_times(self):
+        self.assertEqual(self.finish("The purchase price is CHF 12,450.00.",
+                                     "Der Kaufpreis beträgt CHF 12.450,00."),
+                         f"Der Kaufpreis beträgt Fr.{NBSP}12{NBSP}450.{WJ}–.")
+        self.assertEqual(self.finish("The fee of EUR 1,250.50 is payable at 2:30 p.m.",
+                                     "Die Gebühr von EUR 1.250,50 ist um 14:30 Uhr zu zahlen."),
+                         "Die Gebühr von EUR 1250.50 ist um 14.30 Uhr zu zahlen.")
+
+    def test_a_german_am_is_not_a_morning(self):
+        self.assertEqual(self.finish("The meeting is at 12:00 on Monday.",
+                                     "Die Sitzung ist um 12:00 am Montag."),
+                         "Die Sitzung ist um 12.00 am Montag.")
+
+    def test_a_range_shares_its_currency(self):
+        self.assertEqual(self.finish("Between CHF 1,000.50 and 2,000.50",
+                                     "Zwischen CHF 1,000.50 und 2,000.50"),
+                         "Zwischen CHF 1000.50 und 2000.50")
+
+    def test_grouped_whole_numbers(self):
+        self.assertEqual(self.finish("He holds 12,450 shares.", "Er hält 12,450 Aktien."),
+                         f"Er hält 12{NBSP}450 Aktien.")
+        self.assertEqual(self.finish("He holds 1,250 shares.", "Er hält 1.250 Aktien."),
+                         "Er hält 1250 Aktien.")
+
+    def test_whole_francs_have_one_form(self):
+        want = f"Fr.{NBSP}12{NBSP}450.{WJ}–"
+        self.assertEqual(trlib.localize("12,450.00 CHF", "en", "de-CH"), want)
+        for draft in ("Der Preis beträgt CHF 12,450.00.", "Der Preis beträgt 12,450.00 CHF."):
+            self.assertEqual(self.finish("The price is CHF 12,450.00.", draft),
+                             f"Der Preis beträgt {want}.", draft)
+        for draft in ("Fr. 20.-", "CHF 20.–", "Fr. 20.—", f"Fr. 20.{WJ}–", "20.00 CHF"):
+            self.assertEqual(self.finish("x", draft), f"Fr.{NBSP}20.{WJ}–", draft)
+        self.assertEqual(self.finish("CHF 20.00 million", "CHF 20.00 Mio."), "CHF 20.00 Mio.")
+
+
+class SwissLint(unittest.TestCase):
+    """tr-run and tr-lint on a Swiss project whose model wrote the forms the
+    Swiss prompt asks for, and Germany's."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = support.Mock()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.mock.stop()
+
+    def test_the_kits_own_swiss_forms_raise_nothing(self):
+        root = support.project("swiss-lint", "en", "de-CH")
+        src, out = f"{root}/source/fees.docx", f"{root}/translated/fees.docx"
+        support.write_docx(src, ["The fee is CHF 20.", "The price is 12,450.00 CHF in total.",
+                                 "The hearing is at 14:30."])
+        self.mock.set({"map": {
+            "The fee is CHF 20.": "Die Gebühr beträgt Fr. 20.–.",
+            "The price is 12,450.00 CHF in total.": "Der Preis beträgt 12.450,00 CHF insgesamt.",
+            "The hearing is at 14:30.": "Die Verhandlung ist um 14:30 Uhr."}})
+        code, log = support.run("tr-run", root, src, mock=self.mock)
+        self.assertEqual(code, 0, log)
+        self.assertEqual(support.read_docx(out), [
+            f"Die Gebühr beträgt Fr.{NBSP}20.{WJ}–.",
+            f"Der Preis beträgt Fr.{NBSP}12{NBSP}450.{WJ}– insgesamt.",
+            "Die Verhandlung ist um 14.30 Uhr."])
+        _code, lint = support.run("tr-lint", root)
+        self.assertRegex(lint, r"(?m)^findings:\s+0$")
 
 
 if __name__ == "__main__":

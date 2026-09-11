@@ -165,13 +165,12 @@ def main():
                     continue
                 seen.add(frag)
                 # Verbatim is one acceptable outcome; the locale-converted
-                # form is the other. Dates and amounts are matched by these
+                # form is the other, and in Swiss German so are the forms its
+                # conventions allow. Dates and amounts are matched by these
                 # patterns but are required to change -- checking only for
                 # the source spelling reported every converted date as
                 # dropped, which is the same false alarm the NUM check had.
-                sl, tl = trlib.split_direction(direction)
-                want = trlib.localize(frag, sl, tl)
-                if frag not in tgt and (want == frag or want not in tgt):
+                if not trlib.nontranslatable_kept(frag, tgt, sl, tl):
                     findings.append(("NONTR", f"'{frag}' altered or dropped", src, tgt))
 
     for (src, direction, _model, _pver), tgts in by_src.items():
