@@ -786,6 +786,10 @@ _TIME_AMPM = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*([ap])\.?\s*m\.?\s*$", re.I)
 _AMOUNT = re.compile(r"^\s*([\d.,]+)\s*(EUR|USD|CHF|GBP|SIT|€|\$|£)\s*$")
 _SL_DECIMAL = re.compile(r"^(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d+)?$")
 _EN_DECIMAL = re.compile(r"^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
+# An English number that reads as well as a section or clause, a version or
+# a time as it does as a decimal: 5.10, 3.2, 14.30. Up to three digits with
+# no leading zero, one or two after the point, no thousands separator.
+_AMBIGUOUS_POINT = re.compile(r"[1-9]\d{0,2}\.\d{1,2}")
 
 
 def _sl_number_to_en(s):
@@ -865,7 +869,7 @@ def _en_to_sl(s):
         num = _en_number_to_sl(m.group(1))
         return f"{num} {m.group(2)}" if num else None
 
-    return _en_number_to_sl(s)
+    return None if _AMBIGUOUS_POINT.fullmatch(s) else _en_number_to_sl(s)
 
 
 # Capitalised: German capitalises nouns, month names among them.
@@ -908,7 +912,7 @@ def _en_to_de(s):
         num = _en_number_to_sl(m.group(1))
         return f"{num} {m.group(2)}" if num else None
 
-    return _en_number_to_sl(s)
+    return None if _AMBIGUOUS_POINT.fullmatch(s) else _en_number_to_sl(s)
 
 
 # Switzerland writes German by the Swiss Federal Chancellery's Schreibweisungen
@@ -940,7 +944,10 @@ _CH_AMOUNT = re.compile(rf"^\s*(?:(?P<pre>{_CURRENCY})\s*(?P<a>[\d.,]+)"
 def _swiss_number(s, money):
     """An English-format number in Swiss form, or None if s is not one:
     12,450.00 as 12 450,00, or 12 450.00 when it is money; 1,250 as 1250."""
-    if not _EN_DECIMAL.fullmatch(s):
+    # Bare digits with no currency beside them are left as they stand: 80331
+    # is as likely a postcode, an account or a file number as a quantity, and
+    # an identifier is reproduced verbatim.
+    if not _EN_DECIMAL.fullmatch(s) or (s.isdigit() and not money):
         return None
     integer, _, fraction = s.replace(",", "").partition(".")
     if len(integer) > 4:
@@ -975,7 +982,7 @@ def _en_to_ch(s):
         if currency in ("CHF", "Fr.") and not fraction.strip("0"):
             return f"Fr.{NBSP}{integer}.{WJ}–"     # one line: _whole_francs()
         return f"{currency} {number}"
-    return _swiss_number(s, money=False)
+    return None if _AMBIGUOUS_POINT.fullmatch(s) else _swiss_number(s, money=False)
 
 
 _SHARP_S = re.compile(r"\w*[ßẞ]\w*")
@@ -1015,9 +1022,12 @@ def localize(text, src_lang, tgt_lang):
     left alone until someone needs them, because applying another language's
     conventions silently would be worse than doing nothing.
 
-    Deliberately conservative in two places. "14:30" is read as a time,
-    "14.30" never is -- in an isolated cell that is far more likely a decimal,
-    and a wrong guess would corrupt a value rather than merely misformat it.
+    Deliberately conservative in three places. "14:30" is read as a time,
+    "14.30" never is. From English, a number like 5.10, 3.2 or 14.30 standing
+    alone is not converted at all: it is as likely a section, a clause or a
+    time as a decimal, and 5,10 would turn a reference into a quantity. A
+    wrong guess corrupts a value where leaving it misformats one. With a
+    currency beside it, or a thousands separator in it, it is converted.
     An all-numeric date like 03/05/2024 is left alone in both directions,
     because which number is the month cannot be known and guessing would move
     the date by months.
@@ -1114,9 +1124,49 @@ _GROUPED = re.compile(
 _WHOLE_AMOUNT = re.compile(r"(\d)[.,]\u2060?[–-](?!\d)")
 
 
+# A date is one value however it is written. 5.3.2024, 5. 3. 2024,
+# 05.03.2024, 2024-03-05, March 5, 2024, 5th March 2024, 5. marec 2024 and
+# 5. März 2024 all fold to 20240305 before digits are compared. Compared digit
+# by digit, a correctly converted date was three numbers the source did not
+# have -- 3, 5 and 2024 against 532024 -- so every compact date the model
+# converted earned a firmer retry, and a retry that copied the source's
+# spelling won it for adding fewer. A date written with slashes is left as
+# digits: which of its numbers is the month is not known.
+_DATE_DOTTED = re.compile(r"(?<![\d.])(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{4})(?!\d)")
+_DATE_ISO = re.compile(r"(?<![\d./-])(\d{4})-(\d{2})-(\d{2})(?![\d-])")
+_DATE_MONTH_FIRST = re.compile(
+    r"\b(" + _MONTH_NAMES + r")\b\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b,?\s+(\d{4})(?!\d)",
+    re.I)
+_DATE_DAY_FIRST = re.compile(
+    r"(?<![\d.])(\d{1,2})(?:st|nd|rd|th|\.)?\s*(?:of\s+)?(" + _MONTH_NAMES
+    + r")\b\.?,?\s+(\d{4})(?!\d)", re.I)
+
+
+def _date_value(y, mo, d):
+    """A date as one run of digits, spaced off so that it joins no number
+    beside it; None when the parts cannot be a date."""
+    y, mo, d = int(y), int(mo), int(d)
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return None
+    return f" {y:04d}{mo:02d}{d:02d} "
+
+
+def _fold_dates(s):
+    month = lambda name: _MONTH_NUM[name.lower()]   # noqa: E731
+    s = _DATE_ISO.sub(lambda m: _date_value(*m.groups()) or m.group(0), s)
+    s = _DATE_DOTTED.sub(
+        lambda m: _date_value(m.group(3), m.group(2), m.group(1)) or m.group(0), s)
+    s = _DATE_MONTH_FIRST.sub(
+        lambda m: _date_value(m.group(3), month(m.group(1)), m.group(2))
+        or m.group(0), s)
+    return _DATE_DAY_FIRST.sub(
+        lambda m: _date_value(m.group(3), month(m.group(2)), m.group(1))
+        or m.group(0), s)
+
+
 def canon_locale(s):
     """Fold locale spellings onto one form before numbers are compared."""
-    s = s or ""
+    s = _fold_dates(s or "")
     s = _WHOLE_AMOUNT.sub(r"\1.00", s)               # Fr. 20.– -> 20.00
     s = _GROUPED.sub(lambda m: m.group(1) + re.sub(r"\D", "", m.group(2)), s)
     s = _AMPM_RE.sub(_to24, s)                       # 2:30 p.m. -> 14:30
@@ -1436,6 +1486,71 @@ def _regroup(digits, sep):
     return sep.join(out)
 
 
+# Words after which a number is a reference, not a quantity -- Section 5.10,
+# Art. 3.2, clause 3.2, § 5.1 -- in English, and in the German or Slovene a
+# draft may have put them into. A list after the word counts too, so the 3.3
+# of "Articles 3.2 and 3.3" is a reference as well.
+_REFERENCE_WORDS = (
+    r"sections?|secs?|subsections?|articles?|arts?|paragraphs?|paras?|"
+    r"clauses?|sub-?clauses?|schedules?|annex(?:es)?|appendix|appendices|"
+    r"exhibits?|chapters?|chaps?|parts?|items?|points?|rules?|regulations?|"
+    r"nos?|numbers?|versions?|"
+    r"abschnitts?|abschnitte|artikels?|absatz|absätze|abs|ziffer|ziffern|"
+    r"ziff|nummer|nr|kapitel|klauseln?|punkte?|anhang|anlage|teil|"
+    r"randnummer|rn|rz|"
+    r"člen|členi|člena|čl|odstavek|odstavka|odst|točka|točke|tč|poglavje|"
+    r"oddelek|priloga|št")
+_REFERENCE_BEFORE = re.compile(
+    r"(?:\b(?:" + _REFERENCE_WORDS + r")\.?|§§?)\s*"
+    r"(?:\d+(?:\.\d+)*[a-z]?\)?\s*(?:,|;|&|and|or|to|und|oder|bis|in|ali|do"
+    r"|-|–)\s*)*$", re.I)
+# A time written with a period: at 10.30, 10.30 a.m., um 14.30, 14.30 Uhr.
+# Switzerland writes every time this way, so a Swiss draft's 14.30 Uhr is the
+# conversion done, not an amount left undone.
+_PERIOD_TIME = re.compile(r"(?:[01]?\d|2[0-3])\.[0-5]\d")
+_TIME_BEFORE = re.compile(r"\b(?:at|until|till|um|ob)\s*$", re.I)
+_TIME_AFTER = re.compile(
+    r"\s*(?:[ap]\.?\s?m\b\.?|h\b|hrs?\b|hours\b|o'clock|uhr\b|uri\b|ura\b)", re.I)
+_QUANTITY_AFTER = re.compile(r"\s*(?:%|per\s?cent|percent|prozent|odstot)", re.I)
+
+
+def _protected(text, start, end):
+    """Is the number at text[start:end] a reference or a time where it
+    stands? A currency or a percent beside it makes it a quantity whatever
+    word is before it."""
+    before = text[max(0, start - 80):start]
+    if _REFERENCE_BEFORE.search(before):
+        return True
+    if not _PERIOD_TIME.fullmatch(text[start:end]):
+        return False
+    if (_CURRENCY_BEFORE.search(before) or _CURRENCY_AFTER.match(text, end)
+            or _QUANTITY_AFTER.match(text, end)):
+        return False
+    return bool(_TIME_BEFORE.search(before) or _TIME_AFTER.match(text, end))
+
+
+def _rewrite_numbers(tgt, numbers, spell, guarded):
+    """tgt with each of numbers respelled by spell(number, match) wherever it
+    stands whole: not inside a longer run of digits and separators, so a
+    source's 1.50 leaves a draft's 11.50 alone. With guarded, one that is a
+    reference or a time where it stands in tgt is left as it is.
+
+    One pass, longest first, so 1.234.567,89 is not partly rewritten by a
+    shorter number inside it and nothing is respelled twice.
+    """
+    if not numbers:
+        return tgt
+    rx = re.compile(r"(?<![\d.,])(?:"
+                    + "|".join(map(re.escape, sorted(numbers, key=len, reverse=True)))
+                    + r")(?![\d,]|\.\d)")
+
+    def swap(m):
+        if guarded and _protected(tgt, m.start(), m.end()):
+            return m.group(0)
+        return spell(m.group(0), m) or m.group(0)
+    return rx.sub(swap, tgt)
+
+
 def fix_numeric_format(src, tgt, src_lang, tgt_lang):
     """Rewrite amounts the model left in the source's number format.
 
@@ -1465,37 +1580,39 @@ def fix_numeric_format(src, tgt, src_lang, tgt_lang):
     a conversion is which side writes a decimal comma, not which language
     it is. sl<->de therefore converts nothing.
 
-    KNOWN LIMIT, FROM ENGLISH ONLY. English writes both "1.50" as an amount
-    and "5.10" as a section reference, and nothing in the string
-    distinguishes them, so an en->sl, en->de or en->de-CH run turns
-    "Section 5.10" into "Section 5,10", at the end of a sentence as well. The comma-to-point directions have no such ambiguity,
-    because a Slovene or German amount needs a comma decimal and a section
-    reference never has one.
+    FROM ENGLISH, THE WORDS AROUND A NUMBER DECIDE. English writes both "1.50"
+    as an amount and "5.10" as a section reference, and nothing in the string
+    tells them apart. So a number after a reference word -- Section 5.10,
+    Art. 3.2, clauses 3.2 and 3.3, § 5.1 -- or in a time -- at 10.30,
+    10.30 a.m., 14.30 Uhr -- is left as it stands, whether the source or the
+    draft says so; see _protected(). Anything else is converted, and tr-lint's
+    DEC check lists every number of that shape written as a decimal, for the
+    reviewer to confirm. The comma-to-point directions have no such
+    ambiguity, because a Slovene or German amount needs a comma decimal and a
+    section reference never has one.
     """
     if not src or not tgt:
         return tgt
     if src_lang in _POINT_DECIMAL and tgt_lang == "de-CH":
         return _fix_swiss_numbers(src, tgt)
     if src_lang in _COMMA_DECIMAL and tgt_lang in _POINT_DECIMAL:
-        pat, thou_out, dec_out = _SL_AMOUNT, ",", "."
-        strip = "."
+        pat, thou_out, dec_out, strip, guarded = _SL_AMOUNT, ",", ".", ".", False
     elif src_lang in _POINT_DECIMAL and tgt_lang in _COMMA_DECIMAL:
-        pat, thou_out, dec_out = _EN_AMOUNT, ".", ","
-        strip = ","
+        pat, thou_out, dec_out, strip, guarded = _EN_AMOUNT, ".", ",", ",", True
     else:
         return tgt
 
-    subs = {}
+    subs, kept = {}, set()
     for m in pat.finditer(src):
-        whole = m.group(0)
+        if guarded and _protected(src, m.start(), m.end()):
+            kept.add(m.group(0))
+            continue
         digits = m.group(1).replace(strip, "")
-        subs[whole] = _regroup(digits, thou_out) + dec_out + m.group(2)
-    # Longest first: "1.234.567,89" must not be partly rewritten by a shorter
-    # match that happens to sit inside it.
-    for old in sorted(subs, key=len, reverse=True):
-        if old in tgt:
-            tgt = tgt.replace(old, subs[old])
-    return tgt
+        subs[m.group(0)] = _regroup(digits, thou_out) + dec_out + m.group(2)
+    # A number that is a reference or a time anywhere in the source is not
+    # rewritten anywhere in the draft, which may have moved it.
+    return _rewrite_numbers(tgt, set(subs) - kept,
+                            lambda number, _m: subs[number], guarded)
 
 
 _CURRENCY_BEFORE = re.compile(rf"(?:{_CURRENCY})\s*$")
@@ -1505,23 +1622,29 @@ _CURRENCY_AFTER = re.compile(rf"\s*(?:{_CURRENCY})")
 def _fix_swiss_numbers(src, tgt):
     """fix_numeric_format() for English into Swiss German.
 
-    Driven from the source the same way, with the same known limit. Whether a
-    number is money is read in the source, where its currency stands beside
-    it: CHF 12,450.00 is rewritten 12 450.00, and a bare 3.25 becomes 3,25.
+    Driven from the source the same way, and guarded the same way. Whether a
+    number is money is read where it stands, from the currency beside it: CHF 12,450.00 is rewritten 12 450.00, and a bare 3.25 becomes 3,25.
     The currency stays where the model put it; the prompt asks for it first,
     and moving words within a sentence is not arithmetic.
     """
-    subs = {}
+    found, kept, bare = set(), set(), set()
     for m in _EN_AMOUNT.finditer(src):
-        money = bool(_CURRENCY_BEFORE.search(src, 0, m.start())
-                     or _CURRENCY_AFTER.match(src, m.end()))
-        swiss = _swiss_number(m.group(0), money)
-        if swiss and swiss != m.group(0):
-            subs[m.group(0)] = swiss
-    for old in sorted(subs, key=len, reverse=True):
-        if old in tgt:
-            tgt = tgt.replace(old, subs[old])
-    return tgt
+        if _protected(src, m.start(), m.end()):
+            kept.add(m.group(0))
+            continue
+        found.add(m.group(0))
+        if not (_CURRENCY_BEFORE.search(src, 0, m.start())
+                or _CURRENCY_AFTER.match(src, m.end())):
+            bare.add(m.group(0))
+
+    def spell(number, m):
+        # Money where the draft puts a currency beside it; where it puts
+        # none, money if the source never wrote it bare. "Interest of 2.50
+        # on CHF 2.50" has one of each.
+        money = bool(_CURRENCY_BEFORE.search(tgt, 0, m.start())
+                     or _CURRENCY_AFTER.match(tgt, m.end())) or number not in bare
+        return _swiss_number(number, money)
+    return _rewrite_numbers(tgt, found - kept, spell, guarded=True)
 
 
 _SPACED_GROUPS = re.compile(r"(?<![\d.,'’\u00a0])(\d{1,3})((?: \d{3})+)(?!\d)")
@@ -1560,6 +1683,28 @@ def finish_draft(src, tgt, src_lang, tgt_lang):
     if tgt and tgt_lang == "de-CH":
         tgt = swiss_spelling(src, _whole_francs(_swiss_spacing(tgt)))
     return tgt
+
+
+def decimal_rewrites(src, tgt, src_lang, tgt_lang):
+    """Numbers in an English source that read as well as a reference or a
+    time -- 5.10, 3.2, 14.30, with no currency or percent beside them -- and
+    stand in the draft as decimals, 5,10. Whoever converted one, the model or
+    fix_numeric_format(), nothing in the string says whether that was right,
+    so tr-lint lists them for the reviewer."""
+    if src_lang not in _POINT_DECIMAL or base_lang(tgt_lang) not in _COMMA_DECIMAL:
+        return []
+    out = []
+    for m in _EN_AMOUNT.finditer(src or ""):
+        number = m.group(0)
+        if (number in out or not _AMBIGUOUS_POINT.fullmatch(number)
+                or _CURRENCY_BEFORE.search(src, 0, m.start())
+                or _CURRENCY_AFTER.match(src, m.end())
+                or _QUANTITY_AFTER.match(src, m.end())):
+            continue
+        comma = re.escape(number.replace(".", ","))
+        if re.search(r"(?<![\d.,])" + comma + r"(?![\d,]|\.\d)", tgt or ""):
+            out.append(number)
+    return out
 
 
 # ------------------------------------------------ replies that are not translations
@@ -1601,6 +1746,13 @@ def added_numbers(src, tgt):
     than tr-lint's NUM finding does.
     """
     return norm_nums(tgt) - norm_nums(src)
+
+
+def number_distance(src, tgt):
+    """How far a reply's numbers are from its source's, as values: the
+    numbers it adds plus the numbers it drops."""
+    s, t = norm_nums(src), norm_nums(tgt)
+    return sum((t - s).values()) + sum((s - t).values())
 
 
 def max_tokens(text):
@@ -1698,10 +1850,13 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
                 fallback, firm = out, True
                 continue
             if out:
-                # Of the first reply and the firmer one, the one inventing
-                # fewer numbers; tr-lint reports whatever is left as NUM.
-                if (fallback is not None and len(added_numbers(text, out))
-                        > len(added_numbers(text, fallback))):
+                # Of the first reply and the firmer one, the one whose numbers
+                # are nearer the source's as values: a number dropped counts
+                # as much as one added. Counting added numbers alone let a
+                # firm reply win by dropping a date. On a tie the firmer reply
+                # stands. tr-lint reports whatever is left as NUM.
+                if (fallback is not None and number_distance(text, out)
+                        > number_distance(text, fallback)):
                     out = fallback
                 out = finish_draft(text, out, src_lang, tgt_lang)
                 tm_put(text, out, f"{src_lang}-{tgt_lang}", gb)

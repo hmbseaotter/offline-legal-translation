@@ -92,8 +92,9 @@ edited, not whether it is still correct.
 structurally worst at noticing: a number present in the source and absent
 from the target, a non-translatable altered, an agreed term not used, a
 segment handed back untranslated, a reply far longer than anything it was
-asked to translate. Seconds, no inference, and it produces a
-worklist rather than a pass/fail.
+asked to translate, a `5.10` that may be a section reference written as the
+decimal `5,10`. Seconds, no inference, and it produces a worklist rather
+than a pass/fail.
 
 **Earlier translations, reused without a model.** A matter often comes with
 earlier translations of the same kinds of document. `tr-ref` lines each pair
