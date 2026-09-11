@@ -9,12 +9,26 @@ Large tables are dominated by repeated categorical values. Each distinct
 string is translated once and written back by lookup, which collapses the
 work and guarantees identical cells get identical translations.
 """
-import os, sys, argparse, collections
+import os, re, sys, argparse, collections
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import trlib
 import openpyxl
 from openpyxl.utils import column_index_from_string
+from openpyxl.styles.numbers import is_date_format
+
+# A typed date cell's format in the target's convention: the form localize()
+# writes for a date in a text cell, with the locale that names the month.
+# Numbers need nothing: Excel and LibreOffice show a number's separators in
+# the reader's own locale, whatever the file's.
+DATE_FORMATS = {"en": "[$-409]mmmm d, yyyy", "sl": "[$-424]d. mmmm yyyy",
+                "de": "[$-407]d. mmmm yyyy", "de-CH": "[$-807]d. mmmm yyyy"}
+
+
+def date_only(fmt):
+    """Is fmt a date format with no time of day in it?"""
+    bare = re.sub(r'"[^"]*"|\[[^\]]*\]|\\.', "", fmt or "").lower()
+    return is_date_format(fmt) and "h" not in bare and "s" not in bare
 
 def main():
     ap = argparse.ArgumentParser()
@@ -35,12 +49,18 @@ def main():
                 for c in a.cols.split(",")}
 
     wb = openpyxl.load_workbook(a.inp)
-    targets, counter = [], collections.Counter()
+    targets, counter, dated = [], collections.Counter(), []
 
     for ws in wb.worksheets:
         for row in ws.iter_rows():
             for cell in row:
                 if cols and cell.column not in cols:
+                    continue
+                # A typed date is not text, but its format spells the date in
+                # an order -- 5.3.2024 -- which stayed the source's beside text
+                # cells converted to March 5, 2024. It takes the target's.
+                if cell.is_date and date_only(cell.number_format):
+                    dated.append(cell)
                     continue
                 if not isinstance(cell.value, str):
                     continue
@@ -102,6 +122,9 @@ def main():
     if skipped:
         print(f"  not translated: {', '.join(skipped)} - a cell walk does not "
               f"reach them", file=sys.stderr)
+    if dated and a.tgt in DATE_FORMATS:
+        print(f"  {len(dated):,} typed date cell(s) take the {a.tgt} date format",
+              file=sys.stderr)
 
     if a.survey or not a.out:
         print("\n  most repeated values:", file=sys.stderr)
@@ -144,6 +167,9 @@ def main():
         v = cell.value.strip()
         if v in mapping:
             cell.value = trlib.xml_safe(mapping[v])
+    if a.tgt in DATE_FORMATS:
+        for cell in dated:
+            cell.number_format = DATE_FORMATS[a.tgt]
 
     if trlib.REF_HITS:
         print(f"  {trlib.REF_HITS} value(s) taken from reference translations",

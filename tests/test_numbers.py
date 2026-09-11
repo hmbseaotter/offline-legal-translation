@@ -389,5 +389,35 @@ class SwissLint(unittest.TestCase):
         self.assertRegex(lint, r"(?m)^findings:\s+0$")
 
 
+class TypedCells(unittest.TestCase):
+    """tr-xlsx: a typed date cell takes the target's date format; a number, or
+    a date with a time of day, keeps its own. Audit 2026-09-10: P-3."""
+
+    def test_a_typed_date_takes_the_targets_format(self):
+        import datetime
+        import os
+        import openpyxl
+        root = support.project("typed-cells", "sl", "en")
+        src, out = f"{root}/source/t.xlsx", f"{root}/translated/t.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws["A1"], ws["B1"], ws["C1"] = (datetime.date(2024, 3, 5),
+                                        datetime.datetime(2024, 3, 5, 14, 30), 12450.5)
+        ws["A1"].number_format = "d.m.yyyy"
+        ws["B1"].number_format = "d.m.yyyy h:mm"
+        ws["C1"].number_format = "#,##0.00"
+        os.makedirs(os.path.dirname(src), exist_ok=True)
+        wb.save(src)
+        mock = support.Mock()
+        try:
+            code, log = support.run("tr-xlsx", root, src, out, mock=mock)
+        finally:
+            mock.stop()
+        self.assertEqual(code, 0, log)
+        ws = openpyxl.load_workbook(out).active
+        self.assertEqual([ws[c].number_format for c in ("A1", "B1", "C1")],
+                         ["[$-409]mmmm d, yyyy", "d.m.yyyy h:mm", "#,##0.00"])
+
+
 if __name__ == "__main__":
     unittest.main()
