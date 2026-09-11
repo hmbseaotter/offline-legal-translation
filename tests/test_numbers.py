@@ -1,10 +1,11 @@
 """Dates, amounts and times: conversion, comparison, and choosing between
-replies. Audit 2026-09-10: H-5, H-6, H-7."""
+replies. Audit 2026-09-10: H-5, H-6, H-7, M-1."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import unittest
 
 import trlib
+import trref
 
 NBSP, WJ = "\u00a0", "\u2060"
 
@@ -129,6 +130,54 @@ class CompareNumbers(unittest.TestCase):
         self.assertEqual(trlib.norm_nums("The court may order it in 2024."),
                          trlib.norm_nums("2024"))
 
+    def gap(self, src, tgt, s, t):
+        return any(trlib.compare_numbers(src, tgt, s, t))
+
+    def test_numbers_are_read_in_each_sides_notation(self):
+        self.assertTrue(self.gap("EUR 1.50", "EUR 150", "en", "de"))
+        self.assertTrue(self.gap("12.5 m", "125 m", "en", "de"))
+        self.assertTrue(self.gap("1,250 shares", "1,250 Aktien", "en", "de"))
+        self.assertFalse(self.gap("12,450.00", "12.450,00", "en", "de"))
+        self.assertFalse(self.gap("1,250 shares", "1.250 Aktien", "en", "de"))
+        self.assertFalse(self.gap("3.25", "3,25", "en", "sl"))
+
+    def test_conversions_the_kit_asks_for_add_nothing(self):
+        for src, tgt, s, t in [
+                ("The fee is CHF 20.", f"Die Gebühr beträgt Fr. 20.{WJ}–.", "en", "de-CH"),
+                ("The fee is CHF 20.00.", "Die Gebühr beträgt CHF 20.", "en", "de-CH"),
+                ("Odstavek 2 se lahko uporabi.", "Paragraph 2 may be applied.", "sl", "en"),
+                ("The meeting is at 12:00 on Monday.",
+                 "Die Sitzung ist um 12:00 am Montag.", "en", "de"),
+                ("It starts at 2:30 p.m.", "Es beginnt um 14.30 Uhr.", "en", "de-CH"),
+                ("The price is CHF 12,450.00.", "Der Preis beträgt CHF 12 450.00.",
+                 "en", "de-CH"),
+                ("1.- Introduction", "1. Einleitung", "en", "de"),
+                ("Items 100 200 300", "Positionen 100, 200, 300", "en", "de"),
+                ("The notice is dated 2024-03-05.",
+                 "Die Kündigung datiert vom 5. März 2024.", "en", "de")]:
+            self.assertEqual(trlib.compare_numbers(src, tgt, s, t),
+                             (trlib.collections.Counter(), trlib.collections.Counter()),
+                             (src, tgt))
+
+    def test_a_slashed_date_agrees_with_either_reading(self):
+        src = "The notice is dated 03/05/2024."
+        for tgt in ("Die Kündigung datiert vom 05.03.2024.",
+                    "Die Kündigung datiert vom 03.05.2024.",
+                    "Die Kündigung datiert vom 5. März 2024."):
+            self.assertFalse(self.gap(src, tgt, "en", "de"), tgt)
+        self.assertTrue(self.gap(src, "Die Kündigung datiert vom 07.03.2024.", "en", "de"))
+        self.assertFalse(self.gap("dated 03/15/2024", "vom 15.03.2024", "en", "de"))
+
+    def test_reference_alignment_reads_each_side(self):
+        src = ["The deposit is 1,250 EUR and is due on 03/05/2024."]
+        tgt = ["Die Kaution beträgt 1.250 EUR und ist am 05.03.2024 fällig."]
+        kept, _rejected = trref.align_document(src, tgt, langs=("en", "de"))
+        self.assertEqual(kept, [(src[0], tgt[0], True)])
+        kept, rejected = trref.align_document(["The rate is 12.5 per cent."],
+                                              ["Der Satz beträgt 125 Prozent."],
+                                              langs=("en", "de"))
+        self.assertEqual((kept, [r[2] for r in rejected]), ([], ["numbers differ"]))
+
 
 class RetrySelection(unittest.TestCase):
     """ollama_translate() against the mock: the first reply, the firmer retry,
@@ -171,6 +220,19 @@ class RetrySelection(unittest.TestCase):
                                     "Case number 2 BvR 237/09 is given below.",
                                     "The case number is given below.")
         self.assertEqual(out, "The case number is given below.")
+
+    def test_a_batch_retries_only_its_flagged_line(self):
+        cells = [f"Opis blaga {c}{c}" for c in "abcdefghijklmnopq"] + [
+            "Plačano dne 5.3.2024", "Številka spisa"]
+        self.mock.set({"map": {"Plačano dne 5.3.2024": "Paid on March 5, 2024",
+                               "Številka spisa": "File number 2 BvR 237/09"},
+                       "map_firm": {"Številka spisa": "File number"}})
+        before = len(self.mock.requests())
+        out = trlib.ollama_translate_many(cells, "sl", "en")
+        reqs = self.mock.requests()[before:]
+        self.assertEqual([(r["batch"], r["firm"]) for r in reqs], [(True, False), (False, True)])
+        self.assertEqual(out[0], "<<Opis blaga aa>>")
+        self.assertEqual(out[-2:], ["Paid on March 5, 2024", "File number"])
 
 
 if __name__ == "__main__":

@@ -1392,10 +1392,19 @@ _MONTH_NAMES = "|".join(sorted((n for names in MONTHS.values() for n in names),
 # fifth month it put a 5 into every such sentence, which tr-lint reported as
 # a number the translation had lost. A date always has a number beside its
 # month: "March 5", "5 March", "5th March", "5. marec", "20. Mai", "May 2024".
-_MONTH_RE = re.compile(
+_BESIDE_A_NUMBER = (
     r"(?:(?<=\d )|(?<=\d\. )|(?<=\d\.)|(?<=\dst )|(?<=\dnd )|(?<=\drd )"
-    r"|(?<=\dth ))(" + _MONTH_NAMES + r")\b"
-    r"|\b(" + _MONTH_NAMES + r")(?=\.?,?\s+\d)", re.I)
+    r"|(?<=\dth ))({names})\b|\b({names})(?=\.?,?\s+\d)")
+_MONTH_RE = re.compile(_BESIDE_A_NUMBER.format(names=_MONTH_NAMES), re.I)
+# English writes a month capitalised, and in English only a month written so
+# counts: read in any case, "Paragraph 2 may be applied" was May and put a 5
+# into the sentence. Slovene writes its months in lower case, so elsewhere
+# any case counts.
+_EN_MONTH_NAMES = "|".join(sorted(
+    {w for name in _EN_MONTHS + ("Sept",) for w in (name, name[:3])}
+    | {w.upper() for name in _EN_MONTHS + ("Sept",) for w in (name, name[:3])},
+    key=len, reverse=True))
+_EN_MONTH_RE = re.compile(_BESIDE_A_NUMBER.format(names=_EN_MONTH_NAMES))
 _MONTH_NUM = {n: str(num) for num, names in MONTHS.items() for n in names}
 
 # 2:30 p.m. / 2:30PM / 12:05 a.m.
@@ -1411,13 +1420,23 @@ def _to24(m):
     return f"{h:02d}:{mm}"
 
 
-# Digit groups written apart are one number: 12 450 with a plain or a
-# non-breaking space, and 12'450, which older Swiss documents use. A whole
-# franc amount, Fr. 20.–, is 20.00. Without these, a Swiss draft that carried
-# 12,450.00 over correctly as 12 450.00 would raise a NUM finding and a firmer
-# retry. The look-arounds keep a street number beside a postcode apart:
-# "Bahnhofstrasse 12 8001" has no group of exactly three digits after the 12.
+# A time is one value whether written 14:30 or 14.30, as Switzerland writes
+# it: both become 14.30, which a period time on the other side then matches.
+_CLOCK = re.compile(r"(?<![\d:.])(\d{1,2}):([0-5]\d)(?![\d:])")
+
+
+# Digit groups written apart are one number: 12 450 with a non-breaking or a
+# thin space, and 12'450, which older Swiss documents use. A plain space joins
+# groups only in Swiss German, whose prompt asks for them and whose model
+# writes them with plain spaces; elsewhere "Items 100 200 300" is three
+# numbers. A whole franc amount, Fr. 20.–, is 20.00. Without these, a Swiss
+# draft that carried 12,450.00 over correctly as 12 450.00 would raise a NUM
+# finding and a firmer retry. The look-arounds keep a street number beside a
+# postcode apart: "Bahnhofstrasse 12 8001" has no group of exactly three
+# digits after the 12.
 _GROUPED = re.compile(
+    r"(?<![\d.,'’])(\d{1,3})((?:[\u00a0\u202f\u2009'’]\d{3})+)(?!\d)")
+_GROUPED_SWISS = re.compile(
     r"(?<![\d.,'’])(\d{1,3})((?:[ \u00a0\u202f\u2009'’]\d{3})+)(?!\d)")
 _WHOLE_AMOUNT = re.compile(r"(\d)[.,]\u2060?[–-](?!\d)")
 
@@ -1428,8 +1447,7 @@ _WHOLE_AMOUNT = re.compile(r"(\d)[.,]\u2060?[–-](?!\d)")
 # by digit, a correctly converted date was three numbers the source did not
 # have -- 3, 5 and 2024 against 532024 -- so every compact date the model
 # converted earned a firmer retry, and a retry that copied the source's
-# spelling won it for adding fewer. A date written with slashes is left as
-# digits: which of its numbers is the month is not known.
+# spelling won it for adding fewer.
 _DATE_DOTTED = re.compile(r"(?<![\d.])(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{4})(?!\d)")
 _DATE_ISO = re.compile(r"(?<![\d./-])(\d{4})-(\d{2})-(\d{2})(?![\d-])")
 _DATE_MONTH_FIRST = re.compile(
@@ -1449,8 +1467,25 @@ def _date_value(y, mo, d):
     return f" {y:04d}{mo:02d}{d:02d} "
 
 
+# A date written with slashes is day first in one country and month first in
+# another, and nothing in 03/05/2024 says which. It folds to both readings,
+# 20240305/20240503, which agree with either on the other side -- see
+# number_gap() -- so a translation may make it 5 March or May 3, but not
+# 7 March. Where one reading is no date, as in 03/15/2024, it is the other.
+_DATE_SLASHED = re.compile(r"(?<![\d./])(\d{1,2})/(\d{1,2})/(\d{4})(?![\d/])")
+_EITHER_DATE = re.compile(r"\d{8}/\d{8}")
+
+
+def _either_date(m):
+    a, b, y = m.groups()
+    readings = sorted({r.strip() for r in (_date_value(y, b, a), _date_value(y, a, b))
+                       if r})
+    return f" {'/'.join(readings)} " if readings else m.group(0)
+
+
 def _fold_dates(s):
     month = lambda name: _MONTH_NUM[name.lower()]   # noqa: E731
+    s = _DATE_SLASHED.sub(_either_date, s)
     s = _DATE_ISO.sub(lambda m: _date_value(*m.groups()) or m.group(0), s)
     s = _DATE_DOTTED.sub(
         lambda m: _date_value(m.group(3), m.group(2), m.group(1)) or m.group(0), s)
@@ -1462,25 +1497,100 @@ def _fold_dates(s):
         or m.group(0), s)
 
 
-def canon_locale(s):
-    """Fold locale spellings onto one form before numbers are compared."""
+def canon_locale(s, lang=None):
+    """Fold locale spellings onto one form before numbers are compared. Given
+    lang, a.m. and p.m. are read only in English -- in German, "um 12:00 am
+    Montag" is on Monday, not after midnight -- and an English month name only
+    capitalised."""
     s = _fold_dates(s or "")
     s = _WHOLE_AMOUNT.sub(r"\1.00", s)               # Fr. 20.– -> 20.00
-    s = _GROUPED.sub(lambda m: m.group(1) + re.sub(r"\D", "", m.group(2)), s)
-    s = _AMPM_RE.sub(_to24, s)                       # 2:30 p.m. -> 14:30
-    return _MONTH_RE.sub(                            # March 5 -> 3 5
+    grouped = _GROUPED_SWISS if lang == "de-CH" else _GROUPED
+    s = grouped.sub(lambda m: m.group(1) + re.sub(r"\D", "", m.group(2)), s)
+    if lang in (None, "en"):
+        s = _AMPM_RE.sub(_to24, s)                   # 2:30 p.m. -> 14:30
+    s = _CLOCK.sub(r"\1.\2", s)                      # 14:30 -> 14.30
+    months = _EN_MONTH_RE if lang == "en" else _MONTH_RE
+    return months.sub(                               # March 5 -> 3 5
         lambda m: _MONTH_NUM[(m.group(1) or m.group(2)).lower()], s)
 
 
-def norm_nums(s):
-    """Numbers with separators normalized, so 1.234,56 == 1,234.56, and with
-    locale-converted dates and times folded onto a single representation."""
-    out = []
-    for m in NUM_RE.findall(canon_locale(s)):
-        d = re.sub(r"[^\d]", "", m)
-        if d:
-            out.append(d.lstrip("0") or "0")
-    return collections.Counter(out)
+def _value(token, lang):
+    """One number from canon_locale()'s text as a value. 12,450.00 in English
+    and 12.450,00 in German are both 12450, 1.50 and 1,50 are both 1.50, and
+    an all-zero decimal part is dropped, so 20, 20.00 and Fr. 20.– agree.
+
+    Read in lang's notation, because the same digits are different numbers:
+    1,250 is 1250 in English and 1.25 in German. English decimates with a
+    point and groups with a comma, Slovene and German the other way round,
+    and Swiss German decimates with either and never groups with a point.
+    Where both marks appear, the later one is the decimal in any language.
+    Without lang, and for an identifier, a range or a case number, only the
+    digits count -- which read 12.5 and 125 as one number."""
+    if _EITHER_DATE.fullmatch(token):
+        return token
+    if lang is None or not re.fullmatch(r"\d+(?:[.,]\d+)*", token):
+        if lang is None:
+            token = re.sub(r"[.,]0{1,2}$", "", token)
+        digits = re.sub(r"\D", "", token)
+        return (digits.lstrip("0") or "0") if digits else None
+    dots, commas = token.count("."), token.count(",")
+    if dots and commas:
+        mark = "." if token.rfind(".") > token.rfind(",") else ","
+    elif not (dots or commas):
+        mark = None
+    else:
+        sep = "." if dots else ","
+        parts = token.split(sep)
+        if len(parts) > 2:
+            mark = None       # grouped, 1.234.567; or a 1.2.3 section, digits alone
+        elif lang == "de-CH" or (sep == ".") == (base_lang(lang) == "en"):
+            mark = sep        # the language's own decimal mark
+        else:
+            mark = None if len(parts[1]) == 3 else sep
+    if mark is None:
+        return re.sub(r"\D", "", token).lstrip("0") or "0"
+    whole, _, fraction = token.rpartition(mark)
+    whole = re.sub(r"\D", "", whole).lstrip("0") or "0"
+    return f"{whole}.{fraction}" if fraction.strip("0") else whole
+
+
+def norm_nums(s, lang=None):
+    """The numbers in s as values, with dates and times folded onto one form
+    each: see canon_locale() and _value(). Give lang wherever it is known --
+    the source's language for the source, the target's for a draft."""
+    out = collections.Counter()
+    for token in NUM_RE.findall(canon_locale(s, lang)):
+        value = _value(token, lang)
+        if value:
+            out[value] += 1
+    return out
+
+
+def number_gap(s, t):
+    """(lost, added) between two norm_nums() counts: what s has and t lacks,
+    and what t has and s lacks. A slashed date agrees with either reading."""
+    if any("/" in k for k in s) or any("/" in k for k in t):
+        s, t = s.copy(), t.copy()
+        for mine, theirs in ((s, t), (t, s)):
+            for either in [k for k in mine if "/" in k]:
+                for reading in either.split("/"):
+                    n = min(mine[either], theirs[reading] - mine[reading])
+                    if n > 0:
+                        mine[either] -= n
+                        mine[reading] += n
+    return s - t, t - s
+
+
+def same_numbers(s, t):
+    """Do two norm_nums() counts carry the same numbers?"""
+    return s == t or not any(number_gap(s, t))
+
+
+def compare_numbers(src, tgt, src_lang=None, tgt_lang=None):
+    """(lost, added): the source's numbers the target lacks, and the target's
+    the source lacks, each side read in its own language. What tr-lint's NUM
+    check reports, and what the invention retry and reference alignment test."""
+    return number_gap(norm_nums(src, src_lang), norm_nums(tgt, tgt_lang))
 
 # ---------------------------------------------------------------- glossary
 
@@ -2064,7 +2174,7 @@ def implausible(src, tgt):
     return len(t) > 3 * len(s) + 40
 
 
-def added_numbers(src, tgt):
+def added_numbers(src, tgt, src_lang=None, tgt_lang=None):
     """Numbers in the reply that the source does not have, dates and
     separators folded first. The same comparison as tr-lint's NUM check.
 
@@ -2079,14 +2189,14 @@ def added_numbers(src, tgt):
     and turning that into a failed segment would cost the translator more
     than tr-lint's NUM finding does.
     """
-    return norm_nums(tgt) - norm_nums(src)
+    return compare_numbers(src, tgt, src_lang, tgt_lang)[1]
 
 
-def number_distance(src, tgt):
+def number_distance(src, tgt, src_lang=None, tgt_lang=None):
     """How far a reply's numbers are from its source's, as values: the
     numbers it adds plus the numbers it drops."""
-    s, t = norm_nums(src), norm_nums(tgt)
-    return sum((t - s).values()) + sum((s - t).values())
+    lost, added = compare_numbers(src, tgt, src_lang, tgt_lang)
+    return sum(lost.values()) + sum(added.values())
 
 
 def max_tokens(text):
@@ -2138,12 +2248,15 @@ def reference_translation(text, direction, gloss=None):
     return found
 
 
-def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
+def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3, first=None):
     # Every draft and every memory row passes through here or through
     # ollama_translate_many(), so the pair is settled here as well as in the
     # workers, for any caller that did not. Written de-DE, a target selects
     # none of the German rules from the prompt and keys its rows under a
     # direction no Germany run reads.
+    #
+    # first is a reply the text already has, from a batch that flagged it. It
+    # is judged as the first reply, so that only a retry costs a call.
     src_lang, tgt_lang = translation_pair(src_lang, tgt_lang)
     if not is_translatable(text):
         # Not model work, but not necessarily unchanged either: a segment that
@@ -2176,8 +2289,11 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=1800) as r:
-                out = json.loads(r.read())["response"].strip()
+            if attempt == 0 and first is not None:
+                out = first
+            else:
+                with urllib.request.urlopen(req, timeout=1800) as r:
+                    out = json.loads(r.read())["response"].strip()
             out = re.sub(r"^```.*?\n|```$", "", out, flags=re.S).strip()
             if out and implausible(text, out):
                 last = "the reply was far longer than the source"
@@ -2185,7 +2301,7 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
                     break
                 firm = True
                 continue
-            if out and not firm and added_numbers(text, out):
+            if out and not firm and added_numbers(text, out, src_lang, tgt_lang):
                 fallback, firm = out, True
                 continue
             if out:
@@ -2194,8 +2310,9 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
                 # as much as one added. Counting added numbers alone let a
                 # firm reply win by dropping a date. On a tie the firmer reply
                 # stands. tr-lint reports whatever is left as NUM.
-                if (fallback is not None and number_distance(text, out)
-                        > number_distance(text, fallback)):
+                if (fallback is not None
+                        and number_distance(text, out, src_lang, tgt_lang)
+                        > number_distance(text, fallback, src_lang, tgt_lang)):
                     out = fallback
                 out = finish_draft(text, out, src_lang, tgt_lang)
                 tm_put(text, out, f"{src_lang}-{tgt_lang}", gb)
@@ -2231,8 +2348,8 @@ def _batchable(t):
 
 
 def _translate_batch(texts, src_lang, tgt_lang, gloss):
-    """One request for several segments. Returns a list, or None if the
-    reply did not line up exactly with the input.
+    """One request for several segments. Returns [(reply, flagged)], one per
+    segment, or None if the reply did not line up exactly with the input.
 
     Returning None rather than a best guess is the whole safety property:
     a silently misaligned batch would attach every translation to the wrong
@@ -2276,13 +2393,13 @@ def _translate_batch(texts, src_lang, tgt_lang, gloss):
         return None
     if any(not v for v in got.values()):
         return None
-    # One invented line spoils the batch: send every item through the
+    # A line that invented something is flagged, and goes through the
     # single-segment path, which retries it -- and refuses it outright if it
-    # is far longer than its source.
-    if any(implausible(t, got[i]) or added_numbers(t, got[i])
-           for i, t in enumerate(texts, 1)):
-        return None
-    return [got[i] for i in range(1, len(texts) + 1)]
+    # is far longer than its source. Only that line: sending the whole batch
+    # after it turned one correctly converted date into twenty separate calls.
+    return [(got[i], implausible(t, got[i])
+             or bool(added_numbers(t, got[i], src_lang, tgt_lang)))
+            for i, t in enumerate(texts, 1)]
 
 
 def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
@@ -2345,13 +2462,16 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
                 if report:
                     report(done, len(texts), texts[i])
             return
-        for i, tr in zip(idxs, got):
-            tr = finish_draft(texts[i], tr, src_lang, tgt_lang)
-            out[i] = tr
-            # Keyed on the terms that apply to THIS segment, matching the
-            # single-segment path -- not on the block the batch was sent
-            # with, which is the union across twenty segments.
-            tm_put(texts[i], tr, direction, glossary_block(texts[i], gloss or []))
+        for i, (tr, flagged) in zip(idxs, got):
+            if flagged:
+                out[i] = ollama_translate(texts[i], src_lang, tgt_lang, gloss, first=tr)
+            else:
+                tr = finish_draft(texts[i], tr, src_lang, tgt_lang)
+                out[i] = tr
+                # Keyed on the terms that apply to THIS segment, matching the
+                # single-segment path -- not on the block the batch was sent
+                # with, which is the union across twenty segments.
+                tm_put(texts[i], tr, direction, glossary_block(texts[i], gloss or []))
             done += 1
             if report:
                 report(done, len(texts), texts[i])

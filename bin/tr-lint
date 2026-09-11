@@ -8,7 +8,8 @@ structurally worst at noticing. The output is a prioritized worklist for the
 reviewer, not a pass/fail gate.
 
 Checks:
-  NUM   a number present in source is absent from target, or vice versa
+  NUM   a number present in source is absent from target, or vice versa,
+        compared as values with each side read in its own notation
   LONG  the target is far longer than the source: text the model added
   GLOSS a glossary term's agreed translation was not used
   NONTR a string marked non-translatable was altered
@@ -26,10 +27,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import trlib
 
 # Numbers are compared as values, with dates, times and separators folded onto
-# one spelling first -- see trlib.norm_nums, which reference alignment uses
-# too, so the two cannot disagree about whether two sentences carry the same
-# numbers.
-norm_nums = trlib.norm_nums
+# one spelling first -- see trlib.compare_numbers, which the invention retry
+# and reference alignment use too, so none of them can disagree about whether
+# two sentences carry the same numbers.
 
 FAILED = "[TRANSLATION FAILED]"
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -128,9 +128,8 @@ def main():
         if tgt.strip() == src.strip() and trlib.is_translatable(src):
             findings.append(("ECHO", "target identical to source", src, tgt))
 
-        sn, tn = norm_nums(src), norm_nums(tgt)
-        lost = sn - tn
-        added = tn - sn
+        sl, tl = trlib.split_direction(direction)
+        lost, added = trlib.compare_numbers(src, tgt, sl, tl)
         if lost:
             findings.append(("NUM", "missing from target: " + ", ".join(sorted(lost)), src, tgt))
         if added:

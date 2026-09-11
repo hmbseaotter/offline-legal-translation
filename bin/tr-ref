@@ -160,8 +160,11 @@ def main():
             forget(doc, e)
             continue
         paragraphs = show in ("docx", "txt") and thow in ("docx", "txt")
+        # Numbers are read in each side's notation, a Swiss file's as Swiss.
+        tside = variant if trlib.base_lang(variant) == tgt_base else tgt_base
         kept, rejected = trref.align_document(sparas, tparas,
-                                              by_paragraph=paragraphs)
+                                              by_paragraph=paragraphs,
+                                              langs=(src_lang, tside))
         how = show if show == thow else f"{show}/{thow}"
         ocr = (trref.OCR,) if "pdf-ocr" in (show, thow) else ()
         kept = [trref.settle(s, t, ocr + (() if confirmed else (trref.UNCONFIRMED,)))

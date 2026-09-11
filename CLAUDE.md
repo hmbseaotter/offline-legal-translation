@@ -221,7 +221,9 @@ Do not change these without discussing with the operator first.
    (`at 10.30`, `14.30 Uhr`); `tr-lint` lists every one written as a
    decimal (DEC). Dates compare as one value however they are written —
    `5.3.2024`, `2024-03-05` and `March 5, 2024` alike — so a converted date
-   is not a number the model added.
+   is not a number the model added, and a slashed `03/05/2024` agrees with
+   either reading. Each side's numbers are read in its own notation: `1,250`
+   in English is `1.250` in German, and `12.5` is not `125`.
    One file holds the prompt: `prompts/translate.txt`, read from the kit by
    `trlib.build_prompt()`. A missing file is a loud refusal, not a silent
    fallback. A `prompts/translate.txt` in the project or in `_shared`

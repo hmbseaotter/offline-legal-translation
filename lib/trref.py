@@ -233,7 +233,7 @@ def find_pairs(src_lang, tgt_lang):
 # document aligned under older rules is aligned again by the next tr-ref, and
 # until then load_references() does not reuse its pairs: a rule that keeps
 # less protects nothing while the pairs an older rule kept are still stored.
-ALIGN_VERSION = 2
+ALIGN_VERSION = 3
 
 
 def signature(*paths):
@@ -375,7 +375,7 @@ def _bead_cost(la, lb, ratio, na, nb, shape):
         delta = (lb - la * ratio) / math.sqrt(max(la, 1) * S2)
         c += delta * delta / 2
         if na or nb:
-            c += NUM_AGREE if na == nb else NUM_DISAGREE
+            c += NUM_AGREE if trlib.same_numbers(na, nb) else NUM_DISAGREE
     return c
 
 
@@ -388,7 +388,7 @@ def _counts(cs, lo, hi):
     return out
 
 
-def align(a, b, ratio):
+def align(a, b, ratio, langs=(None, None)):
     """Beads (i0, i1, j0, j1) covering both sequences at least total cost.
 
     Searched first within a band around the diagonal -- a translation does
@@ -401,8 +401,8 @@ def align(a, b, ratio):
         return []
     la = [len(x) for x in a]
     lb = [len(x) for x in b]
-    na = [trlib.norm_nums(x) for x in a]
-    nb = [trlib.norm_nums(x) for x in b]
+    na = [trlib.norm_nums(x, langs[0]) for x in a]
+    nb = [trlib.norm_nums(x, langs[1]) for x in b]
     inf = float("inf")
     for band in (max(20, max(n, m) // 10), None):
         cost = [[inf] * (m + 1) for _ in range(n + 1)]
@@ -449,7 +449,7 @@ def _length_ok(s, t, ratio):
     return len(s) < 20 or 0.5 <= len(t) / (len(s) * ratio) <= 2.0
 
 
-def _judge(s, t, ratio):
+def _judge(s, t, ratio, langs=(None, None)):
     """None when the pair may be kept, otherwise the reason it may not."""
     if MARK in s or MARK in t:
         return "illegible"
@@ -457,16 +457,20 @@ def _judge(s, t, ratio):
         return "not translatable"
     if norm(s) == norm(t):
         return "untranslated"
-    if trlib.norm_nums(s) != trlib.norm_nums(t):
+    if any(trlib.compare_numbers(s, t, *langs)):
         return "numbers differ"
     if not _length_ok(s, t, ratio):
         return "length"
     return None
 
 
-def align_document(src_paras, tgt_paras, by_paragraph=True):
+def align_document(src_paras, tgt_paras, by_paragraph=True, langs=(None, None)):
     """(kept, rejected): [(src, tgt, confirmed)] and [(src, tgt, reason)],
     each in document order.
+
+    langs are the source's and the target's language, and each side's
+    numbers are read in its own: 1,250 in English is 1.250 in German, and
+    12.5 is not 125.
 
     by_paragraph lines up paragraphs before sentences, which is both faster
     and more reliable -- when both sides have real paragraphs. Text taken
@@ -484,7 +488,7 @@ def align_document(src_paras, tgt_paras, by_paragraph=True):
     lt = sum(len(p) for p in tgt_paras)
     ratio = min(2.0, max(0.5, lt / ls)) if ls and lt else 1.0
     if by_paragraph:
-        spans = align(src_paras, tgt_paras, ratio)
+        spans = align(src_paras, tgt_paras, ratio, langs)
     else:
         spans = [(0, len(src_paras), 0, len(tgt_paras))]
 
@@ -499,15 +503,15 @@ def align_document(src_paras, tgt_paras, by_paragraph=True):
         ts = trlib.segment("\n".join(tgt_paras[j0:j1])) if j1 > j0 else []
         if ss and ts:
             para_ok = not by_paragraph or (i1 - i0, j1 - j0) == (1, 1)
-            for a, b, c, d in align(ss, ts, ratio):
+            for a, b, c, d in align(ss, ts, ratio, langs):
                 seq.append((ss[a:b], ts[c:d], para_ok,
                             len(src_all) + a, len(tgt_all) + c))
         elif ss or ts:
             seq.append((ss, ts, False, len(src_all), len(tgt_all)))
         src_all.extend(ss)
         tgt_all.extend(ts)
-    ns = [trlib.norm_nums(x) for x in src_all]
-    nt = [trlib.norm_nums(x) for x in tgt_all]
+    ns = [trlib.norm_nums(x, langs[0]) for x in src_all]
+    nt = [trlib.norm_nums(x, langs[1]) for x in tgt_all]
 
     def alone(nums, i):
         return all(nums[k] != nums[i]
@@ -516,12 +520,12 @@ def align_document(src_paras, tgt_paras, by_paragraph=True):
                    if k != i)
 
     one = [len(s) == 1 and len(t) == 1 and ok for s, t, ok, _i, _j in seq]
-    anchored = [one[k] and bool(ns[i]) and ns[i] == nt[j]
+    anchored = [one[k] and bool(ns[i]) and trlib.same_numbers(ns[i], nt[j])
                 and MARK not in s[0] and MARK not in t[0]
                 and _length_ok(s[0], t[0], ratio)
                 and alone(ns, i) and alone(nt, j)
                 for k, (s, t, _ok, i, j) in enumerate(seq)]
-    why = [_judge(s[0], t[0], ratio) if one[k] else "not one-to-one"
+    why = [_judge(s[0], t[0], ratio, langs) if one[k] else "not one-to-one"
            for k, (s, t, _ok, _i, _j) in enumerate(seq)]
     # A neighbour whose numbers or length disagree is a sign that the two
     # documents part company there, whatever its shape.
