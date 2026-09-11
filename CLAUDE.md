@@ -80,7 +80,6 @@ The correct response is to redesign the task, not to read the file.
   docs/                              reference manuals. Readable.
   confidential-projects/             DATA — encrypted container mounts here
     _shared/glossary/base.tsv        terminology reusable across matters
-    _shared/prompts/translate.txt
     .active                          which project the tools operate on
     <project>/source/                the client drop, nested folders intact
               translated/            same tree, same names
@@ -225,7 +224,10 @@ Do not change these without discussing with the operator first.
    is not a number the model added.
    One file holds the prompt: `prompts/translate.txt`, read from the kit by
    `trlib.build_prompt()`. A missing file is a loud refusal, not a silent
-   fallback. Rules that differ by language sit in `{when TGT=de}` … `{end}`
+   fallback. A `prompts/translate.txt` in the project or in `_shared`
+   replaces it for every pair: `tr-run` names it in its banner, and one
+   without `{when}` blocks is refused rather than drafting German and Swiss
+   documents without their rules. Rules that differ by language sit in `{when TGT=de}` … `{end}`
    blocks (conditions on `SRC`, `TGT`, `VARIANT` or `PAIR`), so the rules
    every pair shares are written once and a Slovene→English call is not sent
    German rules it would pay for in prefill. Germany's rendered prompt must

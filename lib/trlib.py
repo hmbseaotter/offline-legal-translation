@@ -602,7 +602,9 @@ def project_pair(src=None, tgt=None):
 
 
 def translation_pair(src=None, tgt=None):
-    """project_pair(), refusing a target no draft can be made in yet."""
+    """project_pair(), refusing a target no draft can be made in yet, and a
+    prompt override that would draft without the per-language rules."""
+    global _OVERRIDE_NOTED
     s, t = project_pair(src, tgt)
     if t != base_lang(t) and t not in VARIANTS_DRAFTED:
         sys.exit(f"TR_TGT is {t}, and drafting into it is not built yet: no "
@@ -611,7 +613,28 @@ def translation_pair(src=None, tgt=None):
                  f"as finished.\n"
                  f"tr-ref and tr-terms --reference already work for {t}. "
                  f"For Germany, set TR_TGT=de; for Switzerland, TR_TGT=de-CH.")
+    # A copy of the prompt made before the rules were split by language has no
+    # {when} blocks, and replaces the kit's file wholesale: German and Swiss
+    # drafts would get Slovene date rules and none of their own, under one
+    # prompt version, with nothing said. Refused; any override is named.
+    override = prompt_override()
+    if override:
+        with open(override, encoding="utf-8") as fh:
+            blocks = "{when" in fh.read()
+        if not blocks:
+            sys.exit(f"{override} replaces the kit's prompt, and has no {{when}} "
+                     f"blocks: every rule that differs by language -- dates, amounts, "
+                     f"times, German and Swiss conventions -- would be missing from "
+                     f"{s} -> {t}.\nDelete it to draft with the kit's "
+                     f"prompts/translate.txt, or rebuild it from that file.")
+        if not _OVERRIDE_NOTED:
+            _OVERRIDE_NOTED = True
+            sys.stderr.write(f"  note: the prompt is {override}, not the kit's "
+                             f"(version {prompt_version(s, t)})\n")
     return s, t
+
+
+_OVERRIDE_NOTED = False
 
 
 def _env_target():
@@ -1643,6 +1666,16 @@ def _select_blocks(text, src_lang, tgt_lang, where):
 _TEMPLATES = {}
 
 
+def prompt_override():
+    """The file standing in for the kit's prompts/translate.txt, or None: the
+    project's prompts/translate.txt, else _shared/prompts/translate.txt."""
+    tpls = [shared("prompts", "translate.txt")]
+    if ROOT and os.path.isdir(ROOT):                 # see load_glossary()
+        tpls.append(path("prompts", "translate.txt"))   # project overrides shared
+    found = [tpl for tpl in tpls if os.path.exists(tpl)]
+    return found[-1] if found else None
+
+
 def _prompt_template(src_lang, tgt_lang):
     """The prompt for a pair with {GLOSSARY} still in place, or None when the
     kit's file is missing. Read once per pair per process, so the text sent
@@ -1653,13 +1686,9 @@ def _prompt_template(src_lang, tgt_lang):
     kit_prompt = os.path.join(KIT_DIR, "prompts", "translate.txt")
     if not os.path.exists(kit_prompt):
         return None
-    where, base = kit_prompt, open(kit_prompt, encoding="utf-8").read()
-    tpls = [shared("prompts", "translate.txt")]
-    if ROOT and os.path.isdir(ROOT):                 # see load_glossary()
-        tpls.append(path("prompts", "translate.txt"))   # project overrides shared
-    for tpl in tpls:
-        if os.path.exists(tpl):
-            where, base = tpl, open(tpl, encoding="utf-8").read()
+    where = prompt_override() or kit_prompt
+    with open(where, encoding="utf-8") as fh:
+        base = fh.read()
     t = _select_blocks(base, src_lang, tgt_lang, where) \
         .replace("{SRC}", LANG.get(src_lang, src_lang)) \
         .replace("{TGT}", LANG.get(base_lang(tgt_lang), tgt_lang))

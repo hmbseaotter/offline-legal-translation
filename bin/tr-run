@@ -228,6 +228,18 @@ cat <<BANNER
   log:     $LOG
 ========================================================
 BANNER
+# A prompt file in the project or in _shared replaces the kit's for every
+# pair. Said here, where it is seen before hours are committed, because it
+# changes the prompt version and with it every memory key.
+PROMPT_FILE="$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import trlib
+print(trlib.prompt_override() or "")' "$BIN/../lib" 2>/dev/null)"
+if [[ -n "$PROMPT_FILE" ]]; then
+  echo "  PROMPT OVERRIDE: $PROMPT_FILE"
+  echo "           replaces the kit's prompts/translate.txt (version $PROMPT_NOW)"
+fi
 if [[ -f "$MANIFEST" && $ALL -eq 0 && $# -eq 0 ]]; then
   echo "  triage: $HELD file(s) held back as not ${TR_SRC:-sl} (tr-inventory)"
 elif [[ ! -f "$MANIFEST" && $# -eq 0 ]]; then

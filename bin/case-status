@@ -61,6 +61,17 @@ if mountpoint -q "$MNT" 2>/dev/null; then
   n=$(find "$MNT/source" -type f 2>/dev/null | wc -l)
   t=$(find "$MNT/translated" -type f 2>/dev/null | wc -l)
   echo "        $n source files, $t translated"
+  # A prompt file here replaces the kit's prompts/translate.txt, moves every
+  # prompt version, and without {when} blocks is refused by tr-run. Named for
+  # _shared; counted for projects, whose names can carry a matter's details.
+  if [[ -f "$MNT/_shared/prompts/translate.txt" ]]; then
+    echo "        prompt override: _shared/prompts/translate.txt replaces the kit's prompt"
+  fi
+  p=$(find "$MNT" -mindepth 3 -maxdepth 3 -path '*/prompts/translate.txt' \
+        ! -path "$MNT/_shared/*" 2>/dev/null | wc -l)
+  if [[ "$p" -gt 0 ]]; then
+    echo "        prompt override: in $p project(s), replacing the kit's prompt"
+  fi
   echo
   guard_report || true
   echo
