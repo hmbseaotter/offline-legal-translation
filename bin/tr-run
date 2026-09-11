@@ -114,27 +114,46 @@ deliv_current() {           # 0 when this file was produced by THIS model+prompt
       'NR>1 && $1==r && $2==m && $3==v {ok=1} END{exit !ok}' "$DELIV"
 }
 
-deliv_record() {
+# One row per source file, in the order the files were last written, and the
+# output column says which deliverable: trlib.deliverable_writers() reads it
+# to tell which source a deliverable on disk holds. Rows from before that
+# column keep four fields and are read as written under target_name().
+deliv_record() {             # source, deliverable -- both relative
   mkdir -p "$(dirname "$DELIV")"
-  [[ -f "$DELIV" ]] || printf 'path\tmodel\tprompt_version\twritten\n' > "$DELIV"
+  [[ -f "$DELIV" ]] || printf 'path\tmodel\tprompt_version\twritten\toutput\n' > "$DELIV"
   # Rewritten in place, inside the container. A mktemp here would put file
   # paths -- which carry party names -- on the unencrypted root.
-  awk -F'\t' -v r="$1" 'NR==1 || $1!=r' "$DELIV" > "$DELIV.tmp" && mv "$DELIV.tmp" "$DELIV"
-  printf '%s\t%s\t%s\t%s\n' "$1" "$MODEL_NOW" "$PROMPT_NOW" "$(date -u +%FT%TZ)" >> "$DELIV"
+  awk -F'\t' -v r="$1" 'NR==1 {print "path\tmodel\tprompt_version\twritten\toutput"; next}
+                        $1!=r' "$DELIV" > "$DELIV.tmp" && mv "$DELIV.tmp" "$DELIV"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$MODEL_NOW" "$PROMPT_NOW" "$(date -u +%FT%TZ)" "$2" >> "$DELIV"
 }
 
-declare -A TARGET
+# Named against every file in source/, not only the ones in this run: whether
+# x.pdf delivers as x.docx or as x.pdf.docx depends on whether an x.docx sits
+# beside it, triaged in or not. Each line is a source, its deliverable, and a
+# note -- clash:<others> for a name still shared, which is refused, and
+# held:<other> for a deliverable on disk holding another source's
+# translation, written there before names were settled this way.
+declare -A TARGET NOTE
 name_batch() {
-  local rel
   printf '%s\n' "${FILES[@]}" | TR_SUFFIX="$SUFFIX" python3 -c '
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "..", "lib"))
 import trlib
 out = sys.argv[2]
-for ln in sys.stdin:
-    rel = ln.rstrip("\n")
-    if rel:
-        print(rel + "\t" + os.path.join(out, trlib.target_name(rel)))
+files = [ln.rstrip("\n") for ln in sys.stdin if ln.strip()]
+names, clashes = trlib.target_names(sorted(set(trlib.source_files()) | set(files)))
+clash = {rel: group for group in clashes for rel in group}
+writers = trlib.deliverable_writers()
+for rel in files:
+    note = ""
+    if rel in clash:
+        note = "clash:" + ", ".join(r for r in clash[rel] if r != rel)
+    else:
+        by = writers.get(names[rel].casefold())
+        if by not in (None, rel) and os.path.exists(os.path.join(out, names[rel])):
+            note = "held:" + by
+    print(rel + "\t" + os.path.join(out, names[rel]) + "\t" + note)
 ' "$BIN/tr-run" "$OUT"
 }
 
@@ -265,8 +284,8 @@ echo
 started=$(date +%s)
 done_n=0; skip_n=0; fail_n=0; seen_n=0
 
-while IFS=$'\t' read -r _rel _tgt; do
-  [[ -n "$_rel" ]] && TARGET["$_rel"]="$_tgt"
+while IFS=$'\t' read -r _rel _tgt _note; do
+  [[ -n "$_rel" ]] && { TARGET["$_rel"]="$_tgt"; NOTE["$_rel"]="$_note"; }
 done < <(name_batch)
 
 for rel in "${FILES[@]}"; do
@@ -284,7 +303,16 @@ for rel in "${FILES[@]}"; do
   if [[ -z "$worker" ]]; then
     echo "skip   $at $rel  (unsupported extension: $ext)"; ((skip_n++)); continue
   fi
-  if [[ -f "$out" && "$out" -nt "$in" ]]; then
+  note="${NOTE[$rel]:-}"
+  if [[ "$note" == clash:* ]]; then
+    # Two sources, one deliverable: whichever ran last would overwrite the
+    # other. Refused until one of them is renamed in source/.
+    echo "FAILED $at $rel  (delivers as ${out#"$OUT"/}, as does ${note#clash:})"
+    ((fail_n++)); continue
+  fi
+  if [[ "$note" == held:* ]]; then
+    echo "redo   $at $rel  (${out#"$OUT"/} holds the translation of ${note#held:})"
+  elif [[ -f "$out" && "$out" -nt "$in" ]]; then
     if deliv_current "$rel"; then
       echo "skip   $at $rel"; ((skip_n++)); continue
     fi
@@ -312,7 +340,7 @@ for rel in "${FILES[@]}"; do
   "$worker" "$in" "$out" 2>&1 | tee -a "$LOG"
 
   if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
-    deliv_record "$rel"
+    deliv_record "$rel" "${out#"$OUT"/}"
     ((done_n++)); echo "  done in $(( $(date +%s) - t0 ))s" | tee -a "$LOG"
   else
     ((fail_n++)); echo "  FAILED" | tee -a "$LOG"

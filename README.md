@@ -52,7 +52,9 @@ prompt's rules differ by target language inside one file, and its version
 is a hash of the text each pair is sent, so an edit cannot go unversioned.
 Word documents, spreadsheets,
 plain text and scanned PDFs each have a worker; filenames and the shape of
-the client's folder tree are preserved into the deliverable.
+the client's folder tree are preserved into the deliverable, and where a
+Word file and a scan of it would deliver under one name, the scan's keeps
+its extension: `x.docx` beside `x.pdf.docx`.
 
 ## The parts worth reading
 

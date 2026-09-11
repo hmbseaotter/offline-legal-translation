@@ -164,6 +164,17 @@ Do not change these without discussing with the operator first.
    looked for `x.pdf`, so every PDF reported as missing and its output as
    orphaned, permanently. A rule needing a comment to keep two copies in
    step is a rule living in the wrong number of places.
+   The other exception is a collision. Where two or more files in one
+   folder would deliver under one name — `x.docx` beside `x.pdf`, `t.xlsx`
+   beside `t.xlsm` — a file whose format changes keeps its extension and
+   takes the new one after it, `x.pdf.docx` and `t.xlsm.xlsx`, while `x.docx`
+   keeps its name. Names compare without case, since a folder copied to
+   Windows would overwrite one with the other there. `trlib.target_names()`
+   decides, over every file in `source/`; a name still shared after it is
+   refused by `tr-run` and listed by `tr-status`. Before it, the file
+   translated last overwrote the other without a word. `work/deliverables.tsv`
+   records which source wrote each deliverable, so one holding another
+   file's translation is redone.
 2. **The client drop is not a clean corpus, and its shape is preserved.**
    Files arrive as nested folder trees — often several separate drops — and
    that structure is carried through `source/` to `translated/` untouched;

@@ -2,9 +2,10 @@
 """tr-status - what is translated, what is missing, what is stale.
 
 Compares source/ against translated/ by filename. Filenames are preserved,
-so the comparison is close to a plain set difference -- with two exceptions
-that trlib.target_name() accounts for: TR_SUFFIX, and the formats whose
-deliverable is a .docx (a scanned PDF cannot be regenerated as a PDF).
+so the comparison is close to a plain set difference -- with the exceptions
+trlib.target_names() accounts for: TR_SUFFIX, the formats whose deliverable
+is a .docx (a scanned PDF cannot be regenerated as a PDF), and files in one
+folder that would otherwise deliver under one name.
 
 Usage:  tr-status [--missing]      # --missing prints bare paths only
 """
@@ -14,9 +15,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import trlib
 
 SRC, TGT = trlib.path("source"), trlib.path("translated")
-
-# Shared with bin/tr-run so the name written and the name looked for agree.
-target_name = trlib.target_name
 
 def walk(root):
     out = set()
@@ -47,12 +45,21 @@ def main():
         held = len(src) - len(src & keep)
         src &= keep
 
-    done, missing, stale = [], [], []
+    # Named against every file in source/, as tr-run names them, so the name
+    # written and the name looked for agree.
+    names, clashes = trlib.target_names(src_all)
+    clashing = {rel for group in clashes for rel in group}
+    writers = trlib.deliverable_writers()
+    done, missing, stale, held = [], [], [], []
     for rel in sorted(src):
-        t = target_name(rel)
+        if rel in clashing:
+            continue
+        t = names[rel]
         tp, sp = os.path.join(TGT, t), os.path.join(SRC, rel)
         if t not in tgt:
             missing.append(rel)
+        elif writers.get(t.casefold(), rel) != rel:
+            held.append(f"{rel}   ({t} holds {writers[t.casefold()]})")
         elif os.path.getmtime(tp) < os.path.getmtime(sp):
             stale.append(rel)
         else:
@@ -68,7 +75,7 @@ def main():
     # set. Comparing with the narrowed set reported every output of a
     # `tr-run --all` as orphaned, which was plainly untrue: those files have
     # sources, just ones triage held back.
-    orphans = sorted(tgt - {target_name(r) for r in src_all})
+    orphans = sorted(tgt - set(names.values()))
 
     print(f"project:    {trlib.project_name()}")
     if in_scope is None:
@@ -80,10 +87,19 @@ def main():
     print(f"missing:    {len(missing)}")
     if stale:
         print(f"stale:      {len(stale)}  (source newer than translation)")
+    if held:
+        print(f"wrong file: {len(held)}  (the deliverable holds another "
+              f"source's translation)")
+    if clashing:
+        print(f"clashing:   {len(clashing)}  (sharing one deliverable name; "
+              f"tr-run refuses them)")
     if orphans:
         print(f"orphaned:   {len(orphans)}  (in translated/, no matching source)")
     print()
-    for label, items in (("MISSING", missing), ("STALE", stale), ("ORPHANED", orphans)):
+    for label, items in (("MISSING", missing), ("STALE", stale),
+                         ("WRONG FILE", held),
+                         ("CLASHING", [", ".join(g) for g in clashes]),
+                         ("ORPHANED", orphans)):
         if items:
             print(f"{label}:")
             for r in items:

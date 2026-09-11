@@ -198,14 +198,86 @@ def xml_safe(text):
 
 
 def target_name(rel, suffix=None):
-    """The deliverable's name for a source file: suffix applied, extension
-    mapped. Filenames are otherwise preserved -- design invariant 1."""
+    """The deliverable's name for a source file on its own: suffix applied,
+    extension mapped. Filenames are otherwise preserved -- design invariant 1.
+    Where files in one folder would share a name, target_names() decides."""
     if suffix is None:
         suffix = os.environ.get("TR_SUFFIX", "")
     stem, ext = os.path.splitext(rel)
     if not ext:
         return rel + suffix
     return stem + suffix + OUT_EXT.get(ext.lower(), ext)
+
+
+def target_names(rels, suffix=None):
+    """({rel: deliverable name}, clashes) for source files given relative to
+    source/. Pass every file in source/, not only the ones being worked on:
+    whether a name is shared depends on the whole folder.
+
+    Each file keeps target_name()'s name unless two or more files in one
+    folder would deliver under it -- x.docx beside x.pdf, t.xlsx beside
+    t.xlsm. Then a file whose format changes keeps its extension and takes
+    the new one after it: x.pdf delivers as x.pdf.docx, x.txt as x.txt.docx,
+    t.xlsm as t.xlsm.xlsx, while x.docx and t.xlsx keep their names. With
+    TR_SUFFIX set, x.pdf delivers as x<suffix>.pdf.docx. A drop holding one
+    document as Word and as a signed PDF is ordinary, and one name for both
+    had the file translated last overwrite the other without a word.
+
+    Names are compared without regard to case, because a deliverable folder
+    copied to Windows or macOS would overwrite one with the other there.
+    clashes lists the groups of files still sharing a name after this -- two
+    names differing only in case, or a source already called x.pdf.docx --
+    which tr-run refuses to translate.
+    """
+    if suffix is None:
+        suffix = os.environ.get("TR_SUFFIX", "")
+    names = {rel: target_name(rel, suffix) for rel in rels}
+
+    def groups():
+        out = collections.defaultdict(list)
+        for rel, name in names.items():
+            out[name.casefold()].append(rel)
+        return [sorted(g) for g in out.values() if len(g) > 1]
+
+    for group in groups():
+        for rel in group:
+            stem, ext = os.path.splitext(rel)
+            if ext.lower() in OUT_EXT:
+                names[rel] = stem + suffix + ext + OUT_EXT[ext.lower()]
+    return names, sorted(groups())
+
+
+def source_files():
+    """Every file under source/, relative to it, as tr-run and tr-status see
+    the drop: office lock files (~$...) and hidden files left out."""
+    root = path("source")
+    out = []
+    for dp, _dirs, files in os.walk(root):
+        out.extend(os.path.relpath(os.path.join(dp, f), root) for f in files
+                   if not f.startswith(("~$", ".")))
+    return sorted(out)
+
+
+def deliverable_writers():
+    """{deliverable name, casefolded: the source file that last wrote it},
+    from work/deliverables.tsv, whose rows tr-run appends in the order it
+    writes them. A row from before the output column is read as written under
+    target_name(), which is where every file was written then."""
+    tsv = path("work", "deliverables.tsv")
+    out = {}
+    if not os.path.exists(tsv):
+        return out
+    with open(tsv, encoding="utf-8") as fh:
+        head = fh.readline().rstrip("\n").split("\t")
+        col = head.index("output") if "output" in head else None
+        for ln in fh:
+            cols = ln.rstrip("\n").split("\t")
+            if not cols[0]:
+                continue
+            name = cols[col] if col is not None and len(cols) > col and cols[col] \
+                else target_name(cols[0])
+            out[name.casefold()] = cols[0]
+    return out
 
 def require_root():
     """Fail loudly rather than writing into the wrong project.

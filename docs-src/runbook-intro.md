@@ -72,7 +72,10 @@ takes a variant; a Swiss German source is `de`.
 **2. Copy the client's drop into `source/`, preserving its folder
 structure.** Filenames and the shape of the tree are reproduced in
 `translated/`, so the structure you create here is the structure you
-deliver. Do not flatten it.
+deliver. Do not flatten it. Where two files in one folder would deliver
+under one name — `x.docx` beside `x.pdf` — the one whose format changes
+keeps its extension: `x.pdf` delivers as `x.pdf.docx`. Two names that differ
+only in case are refused; rename one.
 
 **Earlier translations, if the client has them.** Put both files of each
 pair in the same folder anywhere under `reference/`, named alike apart from

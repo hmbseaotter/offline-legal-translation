@@ -160,7 +160,18 @@ if [[ $ONLY -eq 1 ]]; then
   # --ocr-only is normally given just the input, so $OUT is empty and the
   # hint used to read: tr-pdf 'in.pdf' ''. Suggest the deliverable name the
   # second stage would actually produce.
-  echo "  then:  tr-pdf '$IN' '${OUT:-$TR_ROOT/translated/$base.docx}'"
+  hint="$TR_ROOT/translated/$base.docx"
+  if [[ "${IN#"$TR_ROOT/source/"}" != "$IN" ]]; then
+    # The name tr-run delivers it under, which depends on what else is in
+    # its folder: trlib.target_names().
+    hint="$TR_ROOT/translated/$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import trlib
+print(trlib.target_names(trlib.source_files())[0].get(sys.argv[2], ""))' \
+      "$BIN/../lib" "${IN#"$TR_ROOT/source/"}")"
+  fi
+  echo "  then:  tr-pdf '$IN' '${OUT:-$hint}'"
   exit 0
 fi
 
