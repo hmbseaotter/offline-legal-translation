@@ -79,9 +79,10 @@ def create(name):
                  "# source<TAB>target<TAB>note\n")
     with open(os.path.join(root, "project.conf"), "w", encoding="utf-8") as fh:
         fh.write(f"# {name}\n"
-                 "# Sourced by tr-run. Uncomment and adjust as needed.\n"
+                 "# Read by every tool. Set it before the first tr-run.\n"
                  "TR_SRC=sl\nTR_TGT=en\n"
-                 "# TR_SUFFIX=_translated\n"
+                 "# Label each translation with its language, lease_English.docx:\n"
+                 "# TR_SUFFIX=auto\n"
                  "TR_OCR_LANGS=slv+eng\n")
     print(f"created {root}")
     for s in SUBDIRS:
