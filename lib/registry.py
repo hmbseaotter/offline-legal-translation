@@ -31,7 +31,10 @@ ENV_VARS = [
     ('TR_SRC / TR_TGT', 'sl / en',
      'Per-project, in project.conf. TR_SRC is sl or en: a German source is refused until language detection knows German. TR_TGT is sl, en or de, and may name a German variant: de-DE (the same as de); de-CH, drafted by the Swiss Federal Chancellery\'s rules; or de-AT, which tr-ref and tr-terms read but drafting refuses until its conventions are settled'),
     ('TR_SUFFIX', '(empty)',
-     'Per-project, in project.conf. Set if the client requires it'),
+     'Per-project, in project.conf. Added to each deliverable\'s name before its '
+     'extension. auto: the target language\'s label, such as _German or _German-CH, '
+     'which tr-ref reads, so a translation is also half of a reference pair. A label '
+     'naming another language than TR_TGT is refused'),
     ('TR_NUM_CTX', '8192',
      'Context window. Lower if memory is tight'),
     ('TR_BATCH_ITEMS', '20',

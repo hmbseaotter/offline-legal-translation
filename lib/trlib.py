@@ -200,12 +200,37 @@ def xml_safe(text):
     return _XML_ILLEGAL.sub("", text.replace("\f", "\n"))
 
 
+def deliverable_suffix(target=None):
+    """What a deliverable's name takes before its extension, from TR_SUFFIX:
+    the setting as written, or with TR_SUFFIX=auto the label of the language
+    drafted into -- _English, _German, _German-CH -- spelled as tr-ref reads
+    it, so that a translation delivered beside its source is also half of a
+    reference pair. Unset, nothing: filenames are preserved (invariant 1).
+
+    A written suffix that names another language than the target's is
+    refused. tr-ref would file those translations under the language the
+    name gives, and a Swiss project's _German ones as Germany's."""
+    import trref
+    suffix = os.environ.get("TR_SUFFIX", "")
+    target = lang_code(target or _env_target()) or (target or _env_target())
+    if suffix == "auto":
+        if base_lang(target) not in LANG:
+            sys.exit(f"TR_SUFFIX is auto, and TR_TGT is {target}, which has no label")
+        return trref.label(target)
+    code = trref.file_language(f"x{suffix}.docx")[1]
+    if code and code != target:
+        hint = f" or {trref.label(target)}" if base_lang(target) in LANG else ""
+        sys.exit(f"TR_SUFFIX is {suffix}, which labels a file {code}, and this "
+                 f"project drafts into {target}. Set TR_SUFFIX=auto{hint}.")
+    return suffix
+
+
 def target_name(rel, suffix=None):
     """The deliverable's name for a source file on its own: suffix applied,
     extension mapped. Filenames are otherwise preserved -- design invariant 1.
     Where files in one folder would share a name, target_names() decides."""
     if suffix is None:
-        suffix = os.environ.get("TR_SUFFIX", "")
+        suffix = deliverable_suffix()
     stem, ext = os.path.splitext(rel)
     if not ext:
         return rel + suffix
@@ -233,7 +258,7 @@ def target_names(rels, suffix=None):
     which tr-run refuses to translate.
     """
     if suffix is None:
-        suffix = os.environ.get("TR_SUFFIX", "")
+        suffix = deliverable_suffix()
     names = {rel: target_name(rel, suffix) for rel in rels}
 
     def groups():

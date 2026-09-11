@@ -68,12 +68,14 @@ done
 
 # The pair is settled before anything is listed or promised. A German
 # variant whose rules are not built is refused here, once, rather than by
-# each worker in turn -- which would record every file as FAILED.
+# each worker in turn -- which would record every file as FAILED. So is a
+# TR_SUFFIX that labels deliverables with another language than the target.
 python3 - "$BIN/../lib" <<'PY' || exit 2
 import sys
 sys.path.insert(0, sys.argv[1])
 import trlib
 trlib.translation_pair()
+trlib.deliverable_suffix()
 PY
 
 # Deliverable names come from trlib.target_name, not from a second copy of

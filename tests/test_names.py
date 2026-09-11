@@ -1,12 +1,15 @@
-"""Deliverable names: files in one folder that would deliver under one name.
-Audit 2026-09-10: P-1."""
+"""Deliverable names: files in one folder that would deliver under one name,
+and TR_SUFFIX, which may label them with the target language. Audit
+2026-09-10: P-1."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import calendar
 import os
 import unittest
+from unittest import mock
 
 import trlib
+import trref
 
 
 class TargetNames(unittest.TestCase):
@@ -43,6 +46,23 @@ class TargetNames(unittest.TestCase):
     def test_a_name_still_shared_is_a_clash(self):
         _names, clashes = trlib.target_names(["x.pdf", "x.docx", "x.pdf.docx"], "")
         self.assertEqual(clashes, [["x.pdf", "x.pdf.docx"]])
+
+    def test_auto_labels_with_the_target_language(self):
+        with mock.patch.dict(os.environ, TR_SUFFIX="auto", TR_TGT="de-CH"):
+            names, _clashes = trlib.target_names(["a/x.docx", "a/x.pdf"])
+        self.assertEqual(names, {"a/x.docx": "a/x_German-CH.docx",
+                                 "a/x.pdf": "a/x_German-CH.pdf.docx"})
+        self.assertEqual(trref.file_language("x_German-CH.pdf.docx"), ("x", "de-CH"))
+
+    def test_a_label_naming_another_language_is_refused(self):
+        with mock.patch.dict(os.environ, TR_SUFFIX="_German", TR_TGT="de-CH"):
+            with self.assertRaises(SystemExit) as refused:
+                trlib.target_names(["x.docx"])
+        self.assertIn("TR_SUFFIX=auto or _German-CH", str(refused.exception.code))
+        with mock.patch.dict(os.environ, TR_SUFFIX="_translated", TR_TGT="de-CH"):
+            self.assertEqual(trlib.target_name("x.docx"), "x_translated.docx")
+        with mock.patch.dict(os.environ, TR_SUFFIX="_German-DE", TR_TGT="de"):
+            self.assertEqual(trlib.target_name("x.docx"), "x_German-DE.docx")
 
 
 class ThroughTrRun(unittest.TestCase):
@@ -107,6 +127,24 @@ class ThroughTrRun(unittest.TestCase):
 
         code, out = support.run("tr-run", root, *files, mock=self.mock)
         self.assertIn("skipped: 2", out)
+
+    def test_auto_suffix_through_tr_run(self):
+        root = support.project("auto-suffix", "sl", "en")
+        with open(f"{root}/project.conf", "a", encoding="utf-8") as fh:
+            fh.write("TR_SUFFIX=auto\n")
+        support.write_docx(f"{root}/source/a.docx", [self.FIRST])
+        code, out = support.run("tr-run", root, f"{root}/source/a.docx", mock=self.mock)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(os.listdir(f"{root}/translated"), ["a_English.docx"])
+
+        root = support.project("wrong-suffix", "sl", "en")
+        with open(f"{root}/project.conf", "a", encoding="utf-8") as fh:
+            fh.write("TR_SUFFIX=_German\n")
+        support.write_docx(f"{root}/source/a.docx", [self.FIRST])
+        code, out = support.run("tr-run", root, f"{root}/source/a.docx", mock=self.mock)
+        self.assertEqual(code, 2, out)
+        self.assertIn("TR_SUFFIX is _German, which labels a file de", out)
+        self.assertEqual(os.listdir(f"{root}/translated"), [])
 
     def test_names_differing_only_in_case_are_refused(self):
         root = support.project("case-clash", "sl", "en")
