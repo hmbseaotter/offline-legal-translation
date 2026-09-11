@@ -441,7 +441,20 @@ def record_deliverable(rel, name, outdir=None):
     row = dict(_Now().of(rel), path=rel, output=name,
                written=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                delivered=_file_digest(os.path.join(outdir, name)))
-    rows = [r for r in _deliverable_rows() if r["path"] != rel] + [row]
+    _write_deliverables([r for r in _deliverable_rows() if r["path"] != rel] + [row])
+
+
+def forget_deliverable(rel):
+    """Drop rel's row from work/deliverables.tsv. tr-run calls this when a
+    worker fails: whatever is on disk -- half written, or holding
+    [TRANSLATION FAILED] -- is not current, and without a row the next run
+    drafts it again rather than taking it for a translator's edit."""
+    rows = _deliverable_rows()
+    if any(r["path"] == rel for r in rows):
+        _write_deliverables([r for r in rows if r["path"] != rel])
+
+
+def _write_deliverables(rows):
     tsv = path("work", "deliverables.tsv")
     os.makedirs(os.path.dirname(tsv), exist_ok=True)
     # Written beside itself and renamed, inside the container: a temporary
@@ -2043,6 +2056,10 @@ def max_tokens(text):
 _REFERENCES = None
 REF_HITS = 0
 REF_OPTION_HITS = 0
+# Segments the model could not translate, written [TRANSLATION FAILED]. A
+# worker that wrote any exits non-zero, so tr-run counts its file as failed,
+# records nothing for it, and drafts it again on the next run.
+FAILED = 0
 
 
 def reference_translation(text, direction, gloss=None):
@@ -2095,8 +2112,9 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
     if cached is not None:
         return refinish(text, cached, src_lang, tgt_lang, gb)
     system = build_prompt(src_lang, tgt_lang, gb)
-    last, firm, fallback = None, False, None
+    last, firm, fallback, tries = None, False, None, 0
     for attempt in range(retries):
+        tries = attempt + 1
         payload = {
             "model": require_model(src_lang, tgt_lang),
             "system": system,
@@ -2145,7 +2163,10 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
         out = finish_draft(text, fallback, src_lang, tgt_lang)
         tm_put(text, out, f"{src_lang}-{tgt_lang}", gb)
         return out
-    print(f"  ! translation failed after {retries} tries: {last}", file=sys.stderr)
+    global FAILED
+    FAILED += 1
+    print(f"  ! translation failed after {tries} {'try' if tries == 1 else 'tries'}: "
+          f"{last}", file=sys.stderr)
     return f"[TRANSLATION FAILED] {text}"
 
 # Batching thresholds. Deliberately conservative: a batch that comes back

@@ -137,6 +137,15 @@ trlib.record_deliverable(sys.argv[2], sys.argv[3], sys.argv[4])
 ' "$BIN/../lib" "$1" "$2" "$OUT"
 }
 
+deliv_forget() {             # source, relative
+  python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import trlib
+trlib.forget_deliverable(sys.argv[2])
+' "$BIN/../lib" "$1"
+}
+
 worker_for() {                       # extension -> worker, empty if unsupported
   case "${1,,}" in
     docx) printf '%s' "$BIN/tr-docx" ;;
@@ -327,6 +336,11 @@ for rel in "${FILES[@]}"; do
     deliv_record "$rel" "${out#"$OUT"/}"
     ((done_n++)); echo "  done in $(( $(date +%s) - t0 ))s" | tee -a "$LOG"
   else
+    # Nothing recorded, and any earlier record dropped. The worker exits
+    # non-zero when a segment is written [TRANSLATION FAILED], and what is on
+    # disk then must be drafted again next run, not skipped as current or
+    # kept as a translator's edit.
+    deliv_forget "$rel"
     ((fail_n++)); echo "  FAILED" | tee -a "$LOG"
   fi
 done
@@ -339,3 +353,6 @@ fi
 echo "elapsed:    $(( ($(date +%s) - started) / 60 )) min"
 echo
 echo "next: tr-lint"
+# A run with a failed or refused file exits 1, so neither a script nor a
+# person reading $? takes it for a finished one.
+exit $(( fail_n > 0 ? 1 : 0 ))

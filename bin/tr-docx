@@ -124,6 +124,10 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     doc.save(a.out)
     print(f"  -> {a.out}", file=sys.stderr)
+    if trlib.FAILED:
+        print(f"  {trlib.FAILED} segment(s) could not be translated and are written "
+              f"[TRANSLATION FAILED] - the file counts as failed", file=sys.stderr)
+        sys.exit(3)
 
 if __name__ == "__main__":
     main()

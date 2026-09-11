@@ -14,7 +14,8 @@ Checks:
   NONTR a string marked non-translatable was altered
   DEC   an English 5.10, 3.2 or 14.30 was written as a decimal: an amount,
         or a section, clause or time turned into one?
-  FAIL  a segment where translation errored out
+  FAIL  [TRANSLATION FAILED] in a deliverable or the memory: a segment the
+        model could not translate
   EMPTY empty or whitespace-only target
   ECHO  target identical to source (possible untranslated passthrough)
   INCON the same source segment translated two different ways
@@ -30,6 +31,44 @@ import trlib
 # numbers.
 norm_nums = trlib.norm_nums
 
+FAILED = "[TRANSLATION FAILED]"
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def deliverable_failures():
+    """(deliverable, what follows the marker, the text holding it) for every
+    [TRANSLATION FAILED] under translated/. A failed segment is never stored in
+    the memory, so the deliverables are the one place it can be seen. A Word
+    file is read part by part -- body, headers, footers -- so a nested table
+    or a footer is not missed; a workbook cell by cell."""
+    import zipfile
+    root = trlib.path("translated")
+    out = []
+    for dp, _dirs, files in os.walk(root):
+        for f in sorted(files):
+            p, texts = os.path.join(dp, f), []
+            try:
+                if f.lower().endswith(".docx"):
+                    from lxml import etree
+                    with zipfile.ZipFile(p) as z:
+                        for part in z.namelist():
+                            if re.fullmatch(r"word/(document|header\d*|footer\d*)\.xml", part):
+                                texts += ["".join(t.text or "" for t in par.iter(W + "t"))
+                                          for par in etree.fromstring(z.read(part)).iter(W + "p")]
+                elif f.lower().endswith(".xlsx"):
+                    import openpyxl
+                    wb = openpyxl.load_workbook(p, read_only=True)
+                    texts = [v for ws in wb.worksheets for row in ws.iter_rows(values_only=True)
+                             for v in row if isinstance(v, str)]
+                    wb.close()
+            except Exception:
+                continue
+            for text in texts:
+                for piece in text.split(FAILED)[1:]:
+                    out.append((os.path.relpath(p, root), piece.strip(), text))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tsv", default=trlib.path("work", "lint-report.tsv"))
@@ -38,10 +77,11 @@ def main():
                          "versions (default: only what tr-run would use now)")
     a = ap.parse_args()
 
+    failed = deliverable_failures()
     dbp = trlib.path("work", "tm.sqlite")
-    if not os.path.exists(dbp):
+    if not os.path.exists(dbp) and not failed:
         sys.exit("no translation memory yet - nothing to check")
-    db = sqlite3.connect(dbp)
+    db = trlib._db()
     # The memory keys on (direction, model, prompt_version, source), so a
     # prompt-version bump leaves the old rows in place -- correctly, since
     # invariant 7 says they must not be reused. Linting across all of them
@@ -67,12 +107,12 @@ def main():
         rows = [(src, tgt, direction, model, pver)
                 for key, src, tgt, direction, model, pver in raw
                 if key == trlib.tm_current_key(src, direction, gloss)]
-        if not rows:
+        if not rows and not failed:
             sys.exit(f"no segments for model {trlib.MODEL} prompt "
                      f"{trlib.PROMPT_VERSION} - run tr-run, or use "
                      f"--all-versions to inspect superseded ones")
     db.close()
-    findings = []
+    findings = [("FAIL", f"in {rel}", seg, text) for rel, seg, text in failed]
     by_src = collections.defaultdict(set)
 
     for src, tgt, direction, model, pver in rows:
