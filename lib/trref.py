@@ -52,27 +52,51 @@ translation of a different sentence into a deliverable.
 EXACT REUSE
 
 A source segment identical to a kept reference sentence, whitespace aside,
-takes that translation with no model call -- with two exceptions. When
-references disagree about the same sentence, none is used: choosing between
-two human renderings is the translator's decision, and tr-ref lists them. And
-a translation read by OCR is never reused verbatim, because an OCR misreading
-would pass straight into a deliverable; such pairs still count for
-terminology, where a person reads every proposal.
+takes that translation with no model call, and never enters the translation
+memory. Renderings that differ only in case or punctuation are one rendering,
+written the way most documents write it. A mark between two digits belongs to
+the number, so 5.1 and 51 remain two.
 
-A German translation is reused only in a project writing its variant: a
-Swiss one where TR_TGT is de-CH, a Germany one where it is de. Renderings in
-two variants differ as a matter of course, so one in the other variant is
-neither reused nor counted as a disagreement. The variant matters on the
-target side only; a German->English project reuses a pair whatever German
-its source is written in.
+OPTIONS WHERE THE REFERENCES DISAGREE
+
+Choosing between two human renderings is the translator's decision, so where
+references disagree the draft carries the choice instead of a model draft, as
+one token a search finds, like OCR_ILLEGIBLE:
+
+    REF_OPTIONS «Der Mieter kann kündigen.» | «Der Mieter darf kündigen.»
+
+The rendering found in the most documents comes first -- counted once per
+document, so a clause one file repeats does not outvote two files -- and a tie
+goes to the newest, by the date the translation file says it was last saved:
+Word's core properties, a PDF's ModDate. The date on disk will not do, since
+copying a file resets it. A pinned glossary term that only one rendering uses
+puts that rendering first, whatever the counts. The draft carries two;
+tr-ref --conflicts lists every rendering with its count and the date that
+ordered it, because an internal date can be meaningless -- a file python-docx
+made says 2013-12-23 until something saves it.
+
+A translation read by OCR is never reused on its own, because a misreading
+would pass straight into a deliverable. It is offered instead, tagged (OCR),
+where a person reads it before it stays.
+
+A German translation is reused only in a project writing its variant: a Swiss
+one where TR_TGT is de-CH, a Germany one where it is de. Renderings in two
+variants differ as a matter of course, so one is not a disagreement with the
+other. Where the project's own variant has no reference for a sentence, the
+other variant's renderings are offered, tagged with it -- «…» (de-CH) -- and
+never reused. The variant matters on the target side only; a German->English
+project reuses a pair whatever German its source is written in.
 """
 import collections
+import datetime
 import math
 import os
 import re
 import sqlite3
 import subprocess
 import sys
+import unicodedata
+import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import trlib  # noqa: E402
@@ -428,14 +452,69 @@ def align_document(src_paras, tgt_paras, by_paragraph=True):
     return kept, rejected
 
 
+# ------------------------------------------------------------------- dates
+
+_CORE_DATE = re.compile(
+    r"<dcterms:(modified|created)\b[^>]*>\s*([^<\s]+)\s*</dcterms:\1>")
+_PDF_DATE = re.compile(r"^(ModDate|CreationDate):\s+(\S+)\s*$", re.M)
+
+
+def _utc(value):
+    """An ISO 8601 date as UTC, '2024-03-01T11:00:00Z', or '' if it is not
+    one. One spelling, so that dates compare as strings."""
+    v = (value or "").strip().replace("Z", "+00:00")
+    if re.search(r"[+-]\d\d$", v):                  # pdfinfo writes +01
+        v += ":00"
+    try:
+        d = datetime.datetime.fromisoformat(v)
+    except ValueError:
+        return ""
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=datetime.timezone.utc)
+    return d.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def file_date(path):
+    """(date, where it came from) for a translation file: the date the file
+    itself says it was last saved, as UTC, or ('', 'no date').
+
+    Read from inside the file because the date on disk does not survive a
+    copy: cp gives the copy today's date, and cp -p keeps only the modified
+    time. Word keeps the date in its core properties, a PDF in ModDate. Where
+    that is missing the created date stands in, since a file saved once was
+    last saved when it was made. Plain text records no date.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".docx":
+            with zipfile.ZipFile(path) as z:
+                core = z.read("docProps/core.xml").decode("utf-8", "replace")
+            found = {("Word last saved" if k == "modified" else "Word created"): v
+                     for k, v in _CORE_DATE.findall(core)}
+            order = ("Word last saved", "Word created")
+        elif ext == ".pdf":
+            r = subprocess.run(["pdfinfo", "-isodates", path],
+                               capture_output=True, text=True, timeout=60)
+            found = {f"PDF {k}": v for k, v in _PDF_DATE.findall(r.stdout)}
+            order = ("PDF ModDate", "PDF CreationDate")
+        else:
+            return "", "no date"
+    except (OSError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError):
+        return "", "no date"
+    for label in order:
+        if _utc(found.get(label)):
+            return _utc(found[label]), label
+    return "", "no date"
+
+
 # ------------------------------------------------------------------- store
 
 def store_path():
     return trlib.path("work", "reference.sqlite")
 
 
-def _has_variant(db):
-    return "variant" in {r[1] for r in db.execute("PRAGMA table_info(pairs)")}
+def _columns(db, table):
+    return {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
 
 
 def open_store():
@@ -444,14 +523,19 @@ def open_store():
     db.execute("""CREATE TABLE IF NOT EXISTS pairs(
         direction TEXT, doc TEXT, src TEXT, src_norm TEXT, tgt TEXT,
         how TEXT, reusable INTEGER, variant TEXT NOT NULL DEFAULT '')""")
-    if not _has_variant(db):
+    if "variant" not in _columns(db, "pairs"):
         # A store written before variants. Every German file in it was named
         # without one, and a German suffix without a variant is Germany.
         db.execute("ALTER TABLE pairs ADD COLUMN variant TEXT NOT NULL DEFAULT ''")
     db.execute("CREATE INDEX IF NOT EXISTS pairs_src ON pairs(direction, src_norm)")
     db.execute("""CREATE TABLE IF NOT EXISTS docs(
         direction TEXT, doc TEXT, signature TEXT, kept INTEGER,
-        rejected TEXT, PRIMARY KEY(direction, doc))""")
+        rejected TEXT, date TEXT NOT NULL DEFAULT '',
+        date_from TEXT NOT NULL DEFAULT '', PRIMARY KEY(direction, doc))""")
+    for col in ("date", "date_from"):
+        if col not in _columns(db, "docs"):
+            # A store written before dates; tr-ref fills them in as it runs.
+            db.execute(f"ALTER TABLE docs ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
     return db
 
 
@@ -477,7 +561,7 @@ def kept(db, direction=None):
     language pair -- in every variant, so a caller wanting one variant
     compares the first field. Reads a store from before variants as Germany's.
     """
-    variant = "variant" if _has_variant(db) else "''"
+    variant = "variant" if "variant" in _columns(db, "pairs") else "''"
     sql = (f"SELECT direction, doc, src, src_norm, tgt, how, reusable, {variant} "
            f"FROM pairs")
     args = ()
@@ -489,36 +573,133 @@ def kept(db, direction=None):
         yield reuse_direction(d, var), doc, src, src_norm, tgt, how, reusable
 
 
-def load_reuse():
-    """{direction: {normalised source: translation}}, reusable and agreed only.
+# ------------------------------------------------------------------- reuse
 
-    Agreement is counted within a reuse direction. A Swiss rendering and
-    Germany's differ as a matter of course -- ss for ß, if nothing else -- so
-    neither is a disagreement with the other; each is simply not reused in
-    the other's direction.
-    """
+# One kept pair, as reuse sees it: the direction it is reused in, its
+# document, the translation, whether that was read without OCR, and the date
+# the translation file records.
+Row = collections.namedtuple("Row", "direction doc tgt reusable date date_from")
+
+OPTIONS_MARK = "REF_OPTIONS"
+
+
+def load_references():
+    """{language pair: {normalised source: [Row]}}: every kept pair, for
+    resolve() to decide what each sentence gets. Reads a store from before
+    dates, whose documents then have none."""
     if not os.path.exists(store_path()):
         return {}
     db = sqlite3.connect(store_path(), timeout=60)
-    seen = collections.defaultdict(set)
-    usable = set()
-    for direction, _doc, _src, src_norm, tgt, _how, reusable in kept(db):
-        seen[(direction, src_norm)].add(norm(tgt))
-        if reusable:
-            usable.add((direction, src_norm, tgt))
+    dates = {}
+    if {"date", "date_from"} <= _columns(db, "docs"):
+        dates = {(d, doc): (date, date_from) for d, doc, date, date_from in
+                 db.execute("SELECT direction, doc, date, date_from FROM docs")}
+    out = collections.defaultdict(lambda: collections.defaultdict(list))
+    for d, doc, _src, src_norm, tgt, _how, reusable in kept(db):
+        s, t = trlib.split_direction(d)
+        pair = f"{s}-{trlib.base_lang(t)}"
+        date, date_from = dates.get((pair, doc), ("", ""))
+        out[pair][src_norm].append(
+            Row(d, doc, tgt, reusable, date, date_from or "no date"))
     db.close()
-    out = collections.defaultdict(dict)
-    for direction, src_norm, tgt in usable:
-        if len(seen[(direction, src_norm)]) == 1:
-            out[direction][src_norm] = tgt
-    return dict(out)
+    return {pair: dict(sources) for pair, sources in out.items()}
 
 
-def conflicts(db, direction):
-    """[(source, [translations])] the references reused in direction render
-    more than one way."""
-    by = collections.defaultdict(set)
-    for d, _doc, _src, src_norm, tgt, _how, _reusable in kept(db, direction):
-        if d == direction:
-            by[src_norm].add(norm(tgt))
-    return sorted((s, sorted(ts)) for s, ts in by.items() if len(ts) > 1)
+def rendering_key(text):
+    """What renderings share when they differ only in case and punctuation.
+
+    A mark between two digits is part of the number rather than punctuation,
+    so 5.1 and 51 stay two renderings. lower(), not casefold(): casefold
+    writes ß as ss, which is spelling -- and the very difference between
+    Germany and Switzerland.
+    """
+    t = norm(text).lower()
+    out = []
+    for i, c in enumerate(t):
+        in_number = 0 < i < len(t) - 1 and t[i - 1].isdigit() and t[i + 1].isdigit()
+        out.append(" " if unicodedata.category(c).startswith("P")
+                   and not in_number else c)
+    return " ".join("".join(out).split())
+
+
+def _ranked(items, count, date, name, first=lambda _item: 0):
+    """items by first, then count, then newest date, then name. Two sorts,
+    because a date string cannot be negated into one key: the second keeps
+    the name order among equals, and reverse=True keeps a sort stable."""
+    out = sorted(items, key=name)
+    out.sort(key=lambda i: (first(i), count(i), date(i)), reverse=True)
+    return out
+
+
+class Rendering:
+    """One way the references render a sentence: every spelling of it that
+    differs only in case and punctuation, with what orders it."""
+
+    def __init__(self, rows):
+        clean = [r for r in rows if r.reusable]
+        self.rows = rows
+        self.ocr = not clean                   # every copy of it read by OCR
+        self.docs = {r.doc for r in rows}
+        newest = max(rows, key=lambda r: r.date)
+        self.date, self.date_from, self.date_doc = \
+            newest.date, newest.date_from, newest.doc
+        self.variants = sorted({trlib.split_direction(r.direction)[1] for r in rows})
+        # The spelling most documents use, taken from a copy not read by OCR
+        # whenever there is one.
+        spellings = collections.defaultdict(list)
+        for r in clean or rows:
+            spellings[norm(r.tgt)].append(r)
+        self.text = _ranked(spellings,
+                            count=lambda s: len({r.doc for r in spellings[s]}),
+                            date=lambda s: max(r.date for r in spellings[s]),
+                            name=lambda s: s)[0]
+        self.tags = []
+
+
+def _variant_label(code):
+    """'de-DE' for Germany's plain 'de': a tag has to say which variant."""
+    lang = trlib.base_lang(code)
+    if "-" in code or lang not in trlib.VARIANTS:
+        return code
+    return f"{lang}-{trlib.VARIANTS[lang][0]}"
+
+
+def resolve(rows, direction, source, gloss=None):
+    """What tr-run writes for one source sentence, given the kept pairs of its
+    language pair that translate it: (text, shown, ranked).
+
+    text is the reused translation or a REF_OPTIONS token; shown the
+    renderings written into it; ranked every rendering considered, in order.
+    The project's own variant's renderings are considered when there are any,
+    another variant's only when there are none. One rendering is reused,
+    unless every copy of it was read by OCR or it is another variant's;
+    anything else is offered, at most two at a time.
+    """
+    own = [r for r in rows if r.direction == direction]
+    groups = collections.defaultdict(list)
+    for r in own or rows:
+        groups[rendering_key(r.tgt)].append(r)
+    renderings = [Rendering(g) for g in groups.values()]
+
+    # A pinned term that only one rendering uses picks that rendering.
+    low = (source or "").lower()
+    picks = collections.Counter()
+    for term, target in gloss or ():
+        if term.lower() in low:
+            having = [g for g in renderings if target.lower() in g.text.lower()]
+            if len(having) == 1:
+                picks[id(having[0])] += 1
+    ranked = _ranked(renderings, first=lambda g: picks[id(g)],
+                     count=lambda g: len(g.docs), date=lambda g: g.date,
+                     name=lambda g: g.text)
+
+    if own and len(ranked) == 1 and not ranked[0].ocr:
+        return ranked[0].text, ranked[:1], ranked
+    for g in ranked:
+        g.tags = ([] if own else [_variant_label(v) for v in g.variants]) \
+            + (["OCR"] if g.ocr else [])
+    shown = ranked[:2]
+    text = OPTIONS_MARK + " " + " | ".join(
+        f"«{g.text}»" + (f" ({', '.join(g.tags)})" if g.tags else "")
+        for g in shown)
+    return text, shown, ranked

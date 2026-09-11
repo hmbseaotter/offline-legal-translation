@@ -1427,25 +1427,36 @@ def max_tokens(text):
 
 _REFERENCES = None
 REF_HITS = 0
+REF_OPTION_HITS = 0
 
 
-def reference_translation(text, direction):
-    """The translator's own rendering of this exact sentence, or None.
+def reference_translation(text, direction, gloss=None):
+    """The translator's own rendering of this exact sentence, a REF_OPTIONS
+    token offering the renderings to choose from, or None when no reference
+    has the sentence.
 
     From the project's reference/ folder, lined up by tr-ref; lib/trref.py
-    says what is kept and why. Checked before the memory and before the
-    model, and ahead of the glossary: a sentence a certifying translator has
-    already translated is not a draft. Nothing is reused where references
-    disagree, or where the translation was read by OCR.
+    says what is kept, how renderings are ordered, and when the draft carries
+    options. Checked before the memory and before the model: a sentence a
+    certifying translator has already translated is not a draft, and where
+    their renderings disagree the choice is theirs. The glossary only orders
+    the options.
     """
-    global _REFERENCES, REF_HITS
+    global _REFERENCES, REF_HITS, REF_OPTION_HITS
+    import trref
     if _REFERENCES is None:
         _REFERENCES = {}
         if ROOT and os.path.isdir(ROOT):
-            import trref
-            _REFERENCES = trref.load_reuse()
-    found = _REFERENCES.get(direction, {}).get(" ".join((text or "").split()))
-    if found is not None:
+            _REFERENCES = trref.load_references()
+    s, t = split_direction(direction)
+    rows = _REFERENCES.get(f"{s}-{base_lang(t)}", {}).get(
+        " ".join((text or "").split()))
+    if not rows:
+        return None
+    found = trref.resolve(rows, direction, text, gloss)[0]
+    if found.startswith(trref.OPTIONS_MARK):
+        REF_OPTION_HITS += 1
+    else:
         REF_HITS += 1
     return found
 
@@ -1461,7 +1472,7 @@ def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
         # Not model work, but not necessarily unchanged either: a segment that
         # is only a date or an amount still gets its locale converted.
         return localize(text, src_lang, tgt_lang)
-    ref = reference_translation(text, f"{src_lang}-{tgt_lang}")
+    ref = reference_translation(text, f"{src_lang}-{tgt_lang}", gloss)
     if ref is not None:
         return ref
     gb = glossary_block(text, gloss or [])
@@ -1620,7 +1631,7 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
         if not is_translatable(t):
             out[i] = localize(t, src_lang, tgt_lang)
             continue
-        ref = reference_translation(t, direction)
+        ref = reference_translation(t, direction, gloss)
         if ref is not None:
             out[i] = ref
             continue

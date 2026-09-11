@@ -118,6 +118,9 @@ def main():
     if trlib.REF_HITS:
         print(f"  {trlib.REF_HITS} segment(s) taken from reference translations",
               file=sys.stderr)
+    if trlib.REF_OPTION_HITS:
+        print(f"  {trlib.REF_OPTION_HITS} segment(s) written as REF_OPTIONS - "
+              f"search for it and keep one rendering", file=sys.stderr)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     doc.save(a.out)
     print(f"  -> {a.out}", file=sys.stderr)

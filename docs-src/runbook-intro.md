@@ -83,10 +83,19 @@ a language suffix — `lease-2023_English.docx` beside
 It lines the pairs up sentence by sentence, without a model, and `tr-run`
 then takes the reference translation for any source sentence identical to
 one it kept. Open `work/reference/pairs.tsv` before translating: every line
-in it can reach a deliverable word for word. Two kinds are never reused — a
-sentence the references translate differently (`tr-ref --conflicts` lists
-them), and a translation read by OCR, which counts for terminology only.
-References stay in this project; nothing reads another project's.
+in it can reach a deliverable word for word. Where the references render a
+sentence more than one way, the draft carries the choice instead of a model
+draft:
+
+    REF_OPTIONS «Der Mieter kann kündigen.» | «Der Mieter darf kündigen.»
+
+The rendering found in the most documents comes first, then the newest by
+the date the file itself records, and a pinned glossary term puts the
+rendering that uses it first. A translation read by OCR is offered the same
+way, tagged `(OCR)`, and never reused on its own. Search each deliverable
+for `REF_OPTIONS`, keep one rendering and delete the rest; `tr-ref
+--conflicts` lists every rendering with its count and the date that ordered
+it. References stay in this project; nothing reads another project's.
 
 The suffix may be `_English`, `_German`, `_Slovene` or `_EN`, `_DE`, `_SL`,
 in any case, and the two files may be different formats. It names a
@@ -97,8 +106,9 @@ and skipped, never guessed.
 German takes a variant after a hyphen — `_German-CH`, `_German-AT`, and
 `_German` or `_German-DE` for Germany — so one original beside a Germany and
 a Swiss translation makes two pairs. A German translation is reused only in
-a project whose `TR_TGT` is its variant; one in another variant is lined up
-and listed in `pairs.tsv`, but never reused.
+a project whose `TR_TGT` is its variant. One in another variant is never
+reused; where the project's own variant has no reference for a sentence, it
+is offered as `REF_OPTIONS «…» (de-CH)`.
 
 **3. Classify every file by source language.**
 

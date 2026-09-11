@@ -124,6 +124,8 @@ TOOLS = [
      'in one folder, named alike apart from a language suffix (`_English`, '
      '`_German`, `_German-CH`) — sentence by sentence, without a model. `tr-run` '
      'then takes the translator\'s rendering for any identical source sentence, '
-     'and a German one only where `TR_TGT` is its variant. Read '
+     'and a German one only where `TR_TGT` is its variant. Where renderings '
+     'disagree the draft carries a `REF_OPTIONS` token listing them; '
+     '`--conflicts` shows every rendering and the date that ordered it. Read '
      '`work/reference/pairs.tsv` before translating. **Operator only**'),
 ]
