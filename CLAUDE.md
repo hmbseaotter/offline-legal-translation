@@ -73,7 +73,7 @@ The correct response is to redesign the task, not to read the file.
 ```
 ~/Claude_Stuff/cli_projects/
   translation-tools/                 this repo — no case data, ever
-    bin/  lib/  glossary/  prompts/  tools/  .githooks/
+    bin/  lib/  glossary/  prompts/  tools/  tests/  .githooks/
     fixtures/                        synthetic test docs (gitignored)
 
 ~/translation-work/
@@ -115,6 +115,7 @@ flattens the tree.
 | `tools/cycle-test.sh`                                                    | End-to-end closed→open→closed cycle against a throwaway project, using synthetic fixtures. Needs the container, and refuses if one is already open rather than closing someone else's. **Operator only** — `case-open` blocks while any Claude session is running, so this cannot run in one                                                                                                                                                                                                                                                                                    |
 | `tools/highlight-docx.py <f.docx> [--apply] [--strict]`                  | Re-colours command blocks in the operating documents that lost their highlighting. `--strict` also repaints blocks that merely differ from the rules, which is mostly churn against hand-tuned ones                                                                                                                                                                                                                                                                                                                                                                             |
 | `tools/gen-docs.py [--apply]`                                            | Writes the tables in CLAUDE.md and the manual from lib/registry.py. Run by the pre-commit hook, which refuses a commit where they have drifted                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `tests/run [module] [-k pattern]`                                        | The regression tests: invented documents in a throwaway root and a mock in place of Ollama, so no model and no case material. Seconds. Run before every commit                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `tr-terms [--min-count N] [--top N] [--pin-all] [--write] [--reference]` | Finds source terms the model rendered more than one way and proposes glossary entries. Runs no model. `--pin-all` proposes frequent terms too, since consistent-and-wrong is one find-and-replace while inconsistent is a hunt through every variant. `--reference` harvests from the reference translations `tr-ref` lined up instead of from the drafts. **Operator only**                                                                                                                                                                                                    |
 | `tr-ocrstat [--min-pct N]`                                               | Unreadable-token rate per PDF, worst first, against the 5%/20% thresholds. Answers "verify the OCR" for a whole corpus rather than one file. Legibility only — a misread digit in clean print scores high; use `ocr-check.py` for those. **Operator only**                                                                                                                                                                                                                                                                                                                      |
 | `tr-ref [--rebuild] [--conflicts]`                                       | Lines up reference translations in the project's `reference/` — each pair in one folder, named alike apart from a language suffix (`_English`, `_German`, `_German-CH`) — sentence by sentence, without a model. `tr-run` then takes the translator's rendering for any identical source sentence, and a German one only where `TR_TGT` is its variant. Where renderings disagree the draft carries a `REF_OPTIONS` token listing them; `--conflicts` shows every rendering and the date that ordered it. Read `work/reference/pairs.tsv` before translating. **Operator only** |
@@ -289,5 +290,9 @@ Below it the detector abstains. The UDHR samples are not in the repository;
 `tools/calibrate_lang.py` re-measures against any labelled sample set, and
 should be run after any change to the scoring.
 
-A mock model server is the right way to test the pipeline without waiting
-on real inference — it also keeps iteration fast. See the handover document.
+`tests/run` runs the regression tests: invented documents in a throwaway
+root under `$TMPDIR`, removed afterwards, and `tests/mock_ollama.py` in place
+of the model, so they take seconds and read no case material. Run them
+before every commit; `tests/run test_pins` runs one module and
+`tests/run -k Retry` the tests whose names match. A fix for a defect comes
+with a test that fails without it.

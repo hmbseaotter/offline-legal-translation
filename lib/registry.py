@@ -108,6 +108,10 @@ TOOLS = [
     ('`tools/gen-docs.py [--apply]`',
      'Writes the tables in CLAUDE.md and the manual from lib/registry.py. '
      'Run by the pre-commit hook, which refuses a commit where they have drifted'),
+    ('`tests/run [module] [-k pattern]`',
+     'The regression tests: invented documents in a throwaway root and a mock '
+     'in place of Ollama, so no model and no case material. Seconds. Run '
+     'before every commit'),
     ('`tr-terms [--min-count N] [--top N] [--pin-all] [--write] [--reference]`',
      'Finds source terms the model rendered more than one way and proposes '
      'glossary entries. Runs no model. `--pin-all` proposes frequent terms too, '

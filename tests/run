@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# tests/run - the kit's regression tests. No model, no case material.
+#
+#   tests/run                    every test
+#   tests/run test_numbers       one module
+#   tests/run -k Retry           the tests whose names match
+#
+# Each run makes a throwaway project root under $TMPDIR, filled with invented
+# documents, and removes it at the end; TR_TESTS_KEEP=1 keeps it. Model calls
+# go to tests/mock_ollama.py on a free port, never to Ollama. tests/support.py
+# says what the tests may touch.
+set -uo pipefail
+KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="${TR_VENV:-$HOME/.translate-venv}/bin/python"
+[[ -x "$PY" ]] || { echo "no kit venv at $PY - run tr-setup first" >&2; exit 2; }
+cd "$KIT/tests" || exit 2
+if [[ $# -gt 0 && "$1" != -* ]]; then
+  exec "$PY" -m unittest -v "$@"
+fi
+exec "$PY" -m unittest discover -v -s . -p 'test_*.py' "$@"

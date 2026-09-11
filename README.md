@@ -112,6 +112,11 @@ from the tools' own argparse definitions by `tools/gen-docs.py`, and a
 pre-commit hook refuses a commit where they have drifted. Hand-maintained
 tables had already gone stale in every way that allows.
 
+**Tests without a model.** `tests/run` builds throwaway projects from
+invented documents and answers the model's requests from a mock, so the
+pipeline is exercised end to end in seconds, and a fix arrives with a test
+that fails without it.
+
 ## Measured, not assumed
 
 The planning documents assumed 4 tokens/second. Reality was **0.81**, about
