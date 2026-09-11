@@ -197,10 +197,15 @@ def main():
         # This project's variant only: a Germany translation would propose
         # Straße to a Swiss glossary.
         direction = f"{src_lang}-{tgt_lang}"
-        rows = [(s, t) for d, _doc, s, _sn, t, _how, _r
-                in trref.kept(rdb, direction) if d == direction]
+        stored = list(trref.kept(rdb, direction))
         rdb.close()
+        rows = [(s, t) for d, _doc, s, _sn, t, _how, _r in stored if d == direction]
         if not rows:
+            others = sorted({d for d, *_rest in stored} - {direction})
+            if others:
+                sys.exit(f"tr-ref kept no {direction} sentence pairs. The pairs it "
+                         f"kept are {', '.join(others)}, and another variant's "
+                         f"renderings are not proposed for a {tgt_lang} glossary")
             sys.exit(f"tr-ref kept no {direction} sentence pairs - "
                      f"see work/reference/rejected.tsv for why")
         return harvest(a, rows, gloss, sstop, tstop,
@@ -385,7 +390,8 @@ def harvest(a, rows, gloss, sstop, tstop, origin, note):
             fh.write(f"{term}\t{r1}\t{n}\t{'yes' if conflict else ''}\t"
                      f"{r2 if conflict else ''}\t{c2 if conflict else ''}\n")
     print(f"\n  candidates: {out}")
-    print("  These are proposals from the model's own output, not agreed")
+    source = "the reference translations" if a.reference else "the model's own output"
+    print(f"  These are proposals from {source}, not agreed")
     print("  terminology. Read each one before it becomes a rule tr-lint")
     print("  enforces.")
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """tr-ref - line up reference translations so their sentences are reused.
 
-OPERATOR ONLY, container open. Reads client documents and prints their names.
+OPERATOR ONLY, container open. Reads client documents and prints their names,
+and with --conflicts their sentences.
 
 Usage:  tr-ref [--rebuild] [--conflicts]
 
@@ -30,13 +31,14 @@ for the sentence.
 WHAT IT WRITES, inside the project:
 
   work/reference.sqlite         the kept sentence pairs, which tr-run reuses
-  work/reference/pairs.tsv      the same, to read: document, source, target,
-                                how, and reused -- yes, option or no
+  work/reference/pairs.tsv      the same, to read: document, source, target
+                                as a draft writes it, how, and reused --
+                                yes, option or no
   work/reference/rejected.tsv   the pairs not kept, and why
 
-Read pairs.tsv before the first tr-run. Every line marked yes or option can
-go into a deliverable word for word, and an alignment tool that is right
-almost always is still wrong somewhere.
+Read pairs.tsv before the first tr-run. Every line marked yes or option goes
+into a deliverable in the words its target shows, and no other line does. An
+alignment tool that is right almost always is still wrong somewhere.
 
 A file that cannot be read -- damaged, or not what its extension says -- is
 listed at the end, its sentences leave reuse until it can be read, and
@@ -103,7 +105,7 @@ def main():
               f"  then run tr-ref again.")
         return 0
 
-    pairs, unpaired, ambiguous, unlabelled, other = \
+    pairs, unpaired, ambiguous, unlabelled, other, unsupported = \
         trref.find_pairs(src_lang, tgt_lang)
     db = trref.open_store()
     known = {doc: sig for doc, sig in db.execute(
@@ -113,20 +115,20 @@ def main():
     present = {doc for doc, _s, _t, _v in pairs}
     gone = [doc for doc in known if doc not in present]
     for doc in gone:
-        db.execute("DELETE FROM pairs WHERE direction = ? AND doc = ?", (direction, doc))
-        db.execute("DELETE FROM docs WHERE direction = ? AND doc = ?", (direction, doc))
+        for table in ("pairs", "docs", "rejects"):
+            db.execute(f"DELETE FROM {table} WHERE direction = ? AND doc = ?", (direction, doc))
     db.commit()
 
     print(f"  {len(pairs)} reference pair(s), {reuse_as}\n")
-    rejected_all, failed = [], []
+    failed = []
 
     def forget(doc, e):
         # A document that cannot be read takes its sentences out of reuse
         # until it can be. Kept from the file it replaced, they would go on
         # being reused as though they were still in it.
         print(f"  FAILED     {doc}: {type(e).__name__}: {e}")
-        db.execute("DELETE FROM pairs WHERE direction = ? AND doc = ?", (direction, doc))
-        db.execute("DELETE FROM docs WHERE direction = ? AND doc = ?", (direction, doc))
+        for table in ("pairs", "docs", "rejects"):
+            db.execute(f"DELETE FROM {table} WHERE direction = ? AND doc = ?", (direction, doc))
         db.commit()
         failed.append(doc)
 
@@ -180,9 +182,12 @@ def main():
         db.execute("INSERT OR REPLACE INTO docs (direction, doc, signature, kept, "
                    "rejected, date, date_from) VALUES (?,?,?,?,?,?,?)",
                    (direction, doc, sig, len(kept), summary, date, date_from))
+        db.execute("DELETE FROM rejects WHERE direction = ? AND doc = ?", (direction, doc))
+        db.executemany(
+            "INSERT INTO rejects (direction, doc, src, tgt, reason) VALUES (?,?,?,?,?)",
+            [(direction, doc, s.replace(trref.UNSURE, ""), t.replace(trref.UNSURE, ""), r)
+             for s, t, r in rejected])
         db.commit()
-        rejected_all.extend((doc, s.replace(trref.UNSURE, ""),
-                             t.replace(trref.UNSURE, ""), r) for s, t, r in rejected)
         note = "   (OCR: offered, never reused)" if ocr else "".join(
             f"   ({n} {tag}: offered)" for tag, n in sorted(collections.Counter(
                 tag for _s, _t, tags in kept for tag in tags).items()))
@@ -211,6 +216,11 @@ def main():
               f"not used:")
         for p in other:
             print(f"      {os.path.relpath(p, root)}")
+    if unsupported:
+        print(f"\n  {len(unsupported)} file(s) in a format tr-ref cannot read, "
+              f"skipped - save them as .docx, .pdf or .txt:")
+        for p in unsupported:
+            print(f"      {os.path.relpath(p, root)}")
 
     # What tr-run will write for each sentence, worked out the way it will:
     # from the same store, with the same glossary.
@@ -223,23 +233,31 @@ def main():
     rows = list(trref.kept(db, reuse_as))
     outdir = trlib.path("work", "reference")
     os.makedirs(outdir, exist_ok=True)
+    # What each stored pair puts into a draft, as resolve() decided it: its
+    # rendering, when that is written, in the words written -- converted to
+    # Swiss form where it is offered to a Swiss project. No for a rendering
+    # past the first two, or another variant's where the project's own has
+    # the sentence.
+    written = {}
+    for sn, (text, shown, _ranked) in resolved.items():
+        reused = "option" if text.startswith(trref.OPTIONS_MARK) else "yes"
+        for g in shown:
+            for r in g.sources:
+                written[(r.direction, r.doc, sn, r.tgt)] = (g.text, reused)
     with open(os.path.join(outdir, "pairs.tsv"), "w", encoding="utf-8") as fh:
         fh.write("document\tsource\ttarget\thow\treused\n")
-        for _d, doc, s, sn, t, how, _reusable in rows:
-            # Whether this line's own words reach a draft. No for another
-            # spelling of the rendering kept, a rendering past the first two,
-            # or another variant where the project's own has the sentence.
-            text, shown, _ranked = resolved[sn]
-            reused = "no"
-            if trref.norm(t) in {g.text for g in shown}:
-                reused = "option" if text.startswith(trref.OPTIONS_MARK) else "yes"
+        for d, doc, s, sn, t, how, _reusable in rows:
+            target, reused = written.get((d, doc, sn, t), (t, "no"))
             fh.write("\t".join(x.replace("\t", " ") for x in
-                               (doc, s, t, how, reused)) + "\n")
-    if rejected_all or a.rebuild:
-        with open(os.path.join(outdir, "rejected.tsv"), "w", encoding="utf-8") as fh:
-            fh.write("document\tsource\ttarget\treason\n")
-            for doc, s, t, r in rejected_all:
-                fh.write("\t".join(x.replace("\t", " ") for x in (doc, s, t, r)) + "\n")
+                               (doc, s, target, how, reused)) + "\n")
+    # Every document's rejections. Written from this run's alone, the file
+    # lost those of every document left unchanged, and a run that rejected
+    # nothing left the last file in place, naming documents since removed.
+    with open(os.path.join(outdir, "rejected.tsv"), "w", encoding="utf-8") as fh:
+        fh.write("document\tsource\ttarget\treason\n")
+        for row in db.execute("SELECT doc, src, tgt, reason FROM rejects "
+                              "WHERE direction = ? ORDER BY doc, rowid", (direction,)):
+            fh.write("\t".join(x.replace("\t", " ") for x in row) + "\n")
 
     db.close()
     print(f"\n  {len(rows)} sentence pair(s) kept; {len(resolved) - len(options)} "

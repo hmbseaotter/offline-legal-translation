@@ -50,7 +50,7 @@ def main():
 
     for u in units:
         if trlib.is_translatable(u):
-            out = first.apply(bysrc[u])
+            out = first.apply(bysrc[u], reference=bysrc[u] in trlib.REFERENCE_TEXTS)
         else:
             # Not model work, but a date, amount or time standing alone is
             # still converted to the target's convention; anything else

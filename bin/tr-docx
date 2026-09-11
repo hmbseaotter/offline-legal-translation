@@ -105,13 +105,15 @@ def main():
         src = par.text.strip()
         segs = trlib.segment(src)
         if len(segs) <= 1:
-            out = trlib.ollama_translate(src, a.src, a.tgt, gloss)
+            outs = [trlib.ollama_translate(src, a.src, a.tgt, gloss)]
         else:
             # Translate segment by segment so the TM keys on sentences.
             # This is what makes the cache reusable across documents.
-            out = " ".join(
-                trlib.ollama_translate(s, a.src, a.tgt, gloss) for s in segs)
-        out = first.apply(out)
+            outs = [trlib.ollama_translate(s, a.src, a.tgt, gloss) for s in segs]
+        # Bracketed segment by segment, so that a sentence taken from a
+        # reference is written as the translator wrote it.
+        out = " ".join(first.apply(t, reference=t in trlib.REFERENCE_TEXTS)
+                       for t in outs)
         set_paragraph_text(par, trlib.xml_safe(out))
         trlib.progress(i, len(todo), src[:48])
 

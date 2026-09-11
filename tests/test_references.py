@@ -1,5 +1,6 @@
 """Reference translations: alignment, merging, extraction, and reuse through
-tr-ref and tr-run. Audit 2026-09-10: H-3, H-4, M-7, M-8, M-9."""
+tr-ref and tr-run. Audit 2026-09-10: H-3, H-4, M-7, M-8, M-9, M-10, M-11,
+L-11, L-13, L-14."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import io
@@ -359,6 +360,89 @@ class ThroughTheTools(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(support.read_docx(f"{root}/translated/s.docx"),
                          [f"REF_OPTIONS [[{d}]] (unconfirmed)" for d in D1[:2]])
+
+    def test_a_germany_reference_reaches_a_swiss_draft_in_swiss_form(self):
+        root = support.project("swiss-offer", "en", "de-CH")
+        en = ["The deposit of 1,250.00 EUR is paid according to clause 4.",
+              "The keys are handed over at 14:30 on 2 May 2024.",
+              "Room 7 is used for storage."]
+        de = ["Die Kaution von 1.250,00 EUR wird gemäß Ziffer 4 gezahlt.",
+              "Die Schlüssel werden am 2. Mai 2024 um 14:30 Uhr übergeben.",
+              "Raum 7 dient als Lager."]
+        swiss = ["Die Kaution von 1250.00 EUR wird gemäss Ziffer 4 gezahlt.",
+                 "Die Schlüssel werden am 2. Mai 2024 um 14.30 Uhr übergeben."]
+        support.write_docx(f"{root}/reference/lease/lease_English.docx", en)
+        support.write_docx(f"{root}/reference/lease/lease_German.docx", de)
+        support.write_docx(f"{root}/source/s.docx", en[:2])
+        code, out = support.run("tr-ref", root)
+        self.assertEqual(code, 0, out)
+        for text in swiss:
+            self.assertIn(f"\t{text}\tdocx\toption\n", pairs_tsv(root))
+        mock = support.Mock()
+        try:
+            code, out = support.run("tr-run", root, f"{root}/source/s.docx", mock=mock)
+            self.assertEqual(mock.requests(), [])
+        finally:
+            mock.stop()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(support.read_docx(f"{root}/translated/s.docx"),
+                         [f"REF_OPTIONS [[{t}]] (de-DE)" for t in swiss])
+
+    def test_formats_it_cannot_read_are_listed_and_rejections_are_kept(self):
+        root = support.project("formats", "en", "de")
+        lease_de = f"{root}/reference/lease/lease_German.docx"
+        rules_de = f"{root}/reference/house/rules_German.docx"
+        support.write_text(f"{root}/reference/old/notice_English.doc", "not readable here")
+        support.write_docx(f"{root}/reference/lease/lease_English.docx", E3)
+        support.write_docx(lease_de, D3[:4] + [D3[4].replace("2.550", "3.550")] + D3[5:])
+        support.write_docx(f"{root}/reference/house/rules_English.docx", self.EN)
+        support.write_docx(rules_de, self.DE[:6] + [self.DE[6].replace("500", "600")])
+
+        def rejected():
+            with open(f"{root}/work/reference/rejected.tsv", encoding="utf-8") as fh:
+                return fh.read()
+        code, out = support.run("tr-ref", root)
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 file(s) in a format tr-ref cannot read", out)
+        self.assertIn("old/notice_English.doc", out)
+        self.assertIn("3.550 EUR", rejected())
+        self.assertIn("600 EUR", rejected())
+
+        # The rules change and the lease does not: the lease's rejection stays.
+        support.write_docx(rules_de, self.DE[:2] + [self.DE[2].replace("4", "5")] + self.DE[3:])
+        code, out = support.run("tr-ref", root)
+        self.assertEqual(code, 0, out)
+        self.assertIn("3.550 EUR", rejected())
+        self.assertIn("Raum 5", rejected())
+        self.assertNotIn("600 EUR", rejected())
+
+        # The lease is removed, and its rejection with it.
+        os.remove(lease_de)
+        code, out = support.run("tr-ref", root)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("3.550 EUR", rejected())
+
+
+class FirstMentionOfReferences(unittest.TestCase):
+
+    def test_a_reference_is_written_as_it_is_and_counts_as_a_mention(self):
+        first = trlib.FirstMention("sl-en")
+        src, tgt = first.pairs[0]
+        options = f"REF_OPTIONS [[The {tgt} ruled.]] | [[It ruled.]]"
+        self.assertEqual(first.apply(options, reference=True), options)
+        self.assertEqual(first.apply(f"The {tgt} ruled again."), f"The {tgt} ruled again.")
+        self.assertEqual(trlib.FirstMention("sl-en").apply(f"The {tgt} ruled."),
+                         f"The {src} ({tgt}) ruled.")
+
+    def test_what_a_reference_gave_is_known(self):
+        saved = trlib._REFERENCES
+        trlib._REFERENCES = {"en-de": {"Rule 9 applies.": [row("d9", "Regel 9 gilt.")]}}
+        try:
+            self.assertEqual(trlib.reference_translation("Rule 9 applies.", "en-de"),
+                             "Regel 9 gilt.")
+            self.assertIn("Regel 9 gilt.", trlib.REFERENCE_TEXTS)
+        finally:
+            trlib._REFERENCES = saved
 
 
 if __name__ == "__main__":

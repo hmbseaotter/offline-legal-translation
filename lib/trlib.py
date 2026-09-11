@@ -1028,8 +1028,15 @@ class FirstMention:
         self.pairs = institutions(direction)
         self.seen = set()
 
-    def apply(self, text):
+    def apply(self, text, reference=False):
+        """text with its first mentions bracketed. With reference, text is a
+        translator's rendering or a REF_OPTIONS choice among several: written
+        as it is -- bracketing edited their words, and only the first option
+        -- while an institution it names counts as mentioned."""
         if not text or not self.pairs:
+            return text
+        if reference:
+            self.seen.update(tgt for _src, tgt in self.pairs if tgt in text)
             return text
         for src_form, tgt_form in self.pairs:
             if tgt_form in self.seen:
@@ -2388,6 +2395,9 @@ def max_tokens(text):
 _REFERENCES = None
 REF_HITS = 0
 REF_OPTION_HITS = 0
+# Everything reference_translation() returned, so that a worker can tell the
+# translator's own words from a draft: FirstMention writes them as they are.
+REFERENCE_TEXTS = set()
 # Segments the model could not translate, written [TRANSLATION FAILED]. A
 # worker that wrote any exits non-zero, so tr-run counts its file as failed,
 # records nothing for it, and drafts it again on the next run.
@@ -2422,6 +2432,7 @@ def reference_translation(text, direction, gloss=None):
         REF_OPTION_HITS += 1
     else:
         REF_HITS += 1
+    REFERENCE_TEXTS.add(found)
     return found
 
 

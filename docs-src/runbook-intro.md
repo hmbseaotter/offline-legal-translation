@@ -88,7 +88,8 @@ a language suffix — `lease-2023_English.docx` beside
 It lines the pairs up sentence by sentence, without a model, and `tr-run`
 then takes the reference translation for any source sentence identical to
 one it kept. Open `work/reference/pairs.tsv` before translating: every line
-in it can reach a deliverable word for word. Numbers confirm the alignment,
+marked `yes` or `option` reaches a deliverable in the words it shows, and no
+other line does. Numbers confirm the alignment,
 and a sentence nothing confirms — no number of its own or either side — is
 offered rather than reused, as `REF_OPTIONS [[…]] (unconfirmed)`: a
 translation that omits, adds or swaps a sentence leaves the pairs around it

@@ -183,6 +183,8 @@ def find_pairs(src_lang, tgt_lang):
                 (a_German.docx, a_German.pdf)
     unlabelled  [path] with no language suffix
     other       [path] in a language outside this project's pair
+    unsupported [path] with a language suffix, in a format tr-ref cannot
+                read: .doc, .odt, .rtf
     """
     root = trlib.path("reference")
     src_lang, tgt_lang = trlib.base_lang(src_lang), trlib.base_lang(tgt_lang)
@@ -190,13 +192,19 @@ def find_pairs(src_lang, tgt_lang):
     # translation and a Swiss one, and two files are ambiguous only when they
     # share both.
     sides = {src_lang: {}, tgt_lang: {}}
-    amb, unlabelled, other = set(), [], []
+    amb, unlabelled, other, unsupported = set(), [], [], []
     for dp, _dirs, files in os.walk(root):
         for f in sorted(files):
-            if f.startswith((".", "~$")) or not f.lower().endswith(EXTS):
+            if f.startswith((".", "~$")):
                 continue
             full = os.path.join(dp, f)
             stem, code = file_language(f)
+            if not f.lower().endswith(EXTS):
+                # Named as a reference, in a format this cannot read: listed,
+                # rather than passed over as though it were not there.
+                if code:
+                    unsupported.append(full)
+                continue
             if not code:
                 unlabelled.append(full)
                 continue
@@ -226,7 +234,7 @@ def find_pairs(src_lang, tgt_lang):
         [p for (name, _c), (_d, p) in s.items() if name not in t_codes] +
         [p for (name, _c), (_d, p) in t.items() if name not in s_names])
     ambiguous = sorted({_label(sides[lang][key][0], key[1]) for lang, key in amb})
-    return pairs, unpaired, ambiguous, sorted(unlabelled), sorted(other)
+    return pairs, unpaired, ambiguous, sorted(unlabelled), sorted(other), sorted(unsupported)
 
 
 # The alignment rules' version, recorded in each document's signature. A
@@ -637,6 +645,10 @@ def open_store():
         if col not in _columns(db, "docs"):
             # A store written before dates; tr-ref fills them in as it runs.
             db.execute(f"ALTER TABLE docs ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+    # The pairs not kept, and why, per document, so that rejected.tsv covers
+    # every document and not only the ones aligned in the latest run.
+    db.execute("""CREATE TABLE IF NOT EXISTS rejects(
+        direction TEXT, doc TEXT, src TEXT, tgt TEXT, reason TEXT)""")
     return db
 
 
@@ -829,17 +841,27 @@ def resolve(rows, direction, source, gloss=None):
     unless no copy of it may be -- read by OCR, rejoined at an uncertain
     line-end hyphen, or lined up with nothing to confirm it -- or it is
     another variant's; anything else is offered, at most two at a time.
+    Each rendering's sources are the stored rows it was made from, before
+    any conversion, which pairs.tsv marks as reaching the draft or not.
     """
     own = [r for r in rows if r.direction == direction]
     pool = own or rows
-    if not own and trlib.split_direction(direction)[1] == "de-CH":
-        # Another variant's renderings, offered to a Swiss project, in the
-        # spelling a Swiss draft would have.
-        pool = [r._replace(tgt=trlib.swiss_spelling(source, r.tgt)) for r in pool]
+    origin = {id(r): r for r in pool}
+    s_lang, t_lang = trlib.split_direction(direction)
+    if not own and t_lang == "de-CH":
+        # Another variant's renderings, offered to a Swiss project as a Swiss
+        # draft would have them: ß written ss, and the source's numbers and
+        # times in Swiss form rather than Germany's.
+        finished = [r._replace(tgt=trlib.finish_draft(source, r.tgt, s_lang, t_lang))
+                    for r in pool]
+        origin = {id(f): r for f, r in zip(finished, pool)}
+        pool = finished
     groups = collections.defaultdict(list)
     for r in pool:
         groups[rendering_key(r.tgt)].append(r)
     renderings = [Rendering(g) for g in groups.values()]
+    for g in renderings:
+        g.sources = [origin[id(r)] for r in g.rows]
 
     # A pinned term that only one rendering uses picks that rendering.
     low = (source or "").lower()
