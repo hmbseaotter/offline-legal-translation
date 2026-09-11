@@ -143,4 +143,12 @@ TOOLS = [
      'that disagree are offered the same way; `--conflicts` shows every '
      'rendering and the date that ordered it. Read `work/reference/pairs.tsv` '
      'before translating. **Operator only**'),
+    ('`tr-refimport <originals> <translations> --from L --to L [--into DIR] [--apply]`',
+     'Copies a past project\'s originals and translations, each folder read with its '
+     'subfolders, side by side into the project\'s `reference/` under the originals\' '
+     'folder name, labelled as `tr-ref` reads them: an original without a label takes '
+     'the `--from` label, a labelled file keeps its name. A translation without a label, '
+     'a label naming another language, a name two files would share and a file already '
+     'there are listed and not copied; the archive is not touched. Lists what it would '
+     'do unless `--apply`. **Operator only**'),
 ]

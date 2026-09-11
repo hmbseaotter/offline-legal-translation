@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""tr-refimport - copy a past project's originals and translations into reference/.
+
+OPERATOR ONLY, container open. Reads delivered work and prints the names of
+its files.
+
+Usage:  tr-refimport <originals> <translations> --from en --to de
+                     [--into DIR] [--apply]
+
+<originals> is the folder holding what the client sent, <translations> the
+folder holding the translations delivered, each labelled with its language
+before the extension: lease_German.docx. Each folder is read with its
+subfolders, and a file keeps its path below its folder. An archive kept as
+<client>/in/356 and <client>/out/356 is imported with
+
+    tr-refimport <client>/in/356 <client>/out/356 --from en --to de
+
+and a project laid out any other way by naming its own two folders.
+
+WHAT IT WRITES: copies, and the archive is not touched. The files of both
+folders go side by side into one folder, so that tr-ref pairs them: the
+project's reference/, under the originals' folder name -- reference/356/
+above -- unless --into names another folder inside the container.
+
+    reference/356/lease_English.docx    from <client>/in/356/lease.docx
+    reference/356/lease_German.docx     from <client>/out/356/lease_German.docx
+
+An original with no language label takes the --from label, before every
+extension: lease.pdf.docx is copied as lease_English.pdf.docx. A file already
+labelled with its folder's language keeps its name.
+
+NOT COPIED, and listed with the reason:
+
+  - a translation with no language label: nothing says it is one, and a
+    guess would put it into a pair as one
+  - a label naming another language than its folder's
+  - two files that would take one name, whatever its case
+  - a file already at the destination: nothing is overwritten
+
+Two folders that overlap, or a destination inside either of them, are refused.
+Without --apply it only lists. The summary counts the pairs the copies make,
+and the files tr-ref cannot read, such as .doc: save those as .docx, .pdf or
+.txt. Then run tr-ref.
+
+Only reviewed translations belong in a reference: tr-ref reuses its sentences
+word for word, and tr-lint never checks them.
+"""
+import argparse
+import collections
+import os
+import shutil
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+import trlib  # noqa: E402
+import trref  # noqa: E402
+
+ALREADY = "already at the destination"
+
+
+def language(value, flag):
+    code = trlib.lang_code(value)
+    if not code or trlib.base_lang(code) not in trlib.LANG:
+        sys.exit(f"{flag} {value}: not a language this kit knows - "
+                 f"{', '.join(trlib.LANG)}, or a German variant such as de-CH")
+    return code
+
+
+def destination(into, originals):
+    """Where the copies go: inside the container, never beside the archive."""
+    if not into:
+        return trlib.path("reference", os.path.basename(originals))
+    into = os.path.abspath(into)
+    if not trlib._under(into, trlib.PROJECTS):
+        sys.exit(f"--into {into} is outside {trlib.PROJECTS}: copies of client "
+                 f"files go inside the container")
+    if not trlib.PROJECTS_OVERRIDDEN and not trlib.container_mounted():
+        trlib.require_root()          # says the container is closed, and exits
+    return into
+
+
+def plan(roots, langs, into):
+    """One row per file: [side, path, destination relative to into, why it is
+    not copied -- or None]. side is "originals" or "translations"."""
+    rows = []
+    for side, top in roots.items():
+        for dp, dirs, files in os.walk(top):
+            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+            for f in sorted(files):
+                if f.startswith(("~$", ".")):
+                    continue
+                code, name, why = trref.file_language(f)[1], f, None
+                if code is None and side == "translations":
+                    why = "no language label"
+                elif code is None:
+                    base, exts = trref.split_name(f)
+                    name = base + trref.label(langs[side]) + exts
+                elif trlib.base_lang(code) != trlib.base_lang(langs[side]):
+                    why = f"labelled {code}, among {side} in {langs[side]}"
+                dest = os.path.normpath(os.path.join(os.path.relpath(dp, top), name))
+                rows.append([side, os.path.join(dp, f), dest, why])
+    shared = collections.defaultdict(list)
+    for r in rows:
+        if r[3] is None:
+            shared[r[2].casefold()].append(r)
+    for group in shared.values():
+        for r in group if len(group) > 1 else ():
+            r[3] = f"would share its name with {len(group) - 1} other file(s)"
+    for r in rows:
+        folder = os.path.dirname(os.path.join(into, r[2]))
+        if r[3] is None and os.path.isdir(folder):
+            if os.path.basename(r[2]).casefold() in {x.casefold() for x in os.listdir(folder)}:
+                r[3] = ALREADY
+    return rows
+
+
+def pairs(rows, langs):
+    """How many pairs the copies make as tr-ref pairs them: an original with
+    each translation of the same name in its folder."""
+    names = collections.defaultdict(set)
+    for r in rows:
+        stem, code = trref.file_language(os.path.basename(r[2]))
+        if r[3] in (None, ALREADY) and code and r[2].lower().endswith(trref.EXTS):
+            names[(os.path.dirname(r[2]).casefold(), stem.casefold())].add(code)
+    made = 0
+    for codes in names.values():
+        if any(trlib.base_lang(c) == trlib.base_lang(langs["originals"]) for c in codes):
+            made += sum(trlib.base_lang(c) == trlib.base_lang(langs["translations"])
+                        for c in codes)
+    return made
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Copy a past project's originals and translations into reference/, "
+                    "labelled.")
+    ap.add_argument("originals", help="the folder holding what the client sent")
+    ap.add_argument("translations", help="the folder holding the translations delivered")
+    ap.add_argument("--from", dest="src", required=True,
+                    help="language of the originals: en or sl")
+    ap.add_argument("--to", dest="tgt", required=True,
+                    help="language of the translations: de, de-CH, en or sl")
+    ap.add_argument("--into",
+                    help="where the copies go, inside the container; default the "
+                         "project's reference/, under the originals' folder name")
+    ap.add_argument("--apply", action="store_true",
+                    help="copy; without it, only list what would be copied")
+    a = ap.parse_args()
+
+    langs = {"originals": language(a.src, "--from"), "translations": language(a.tgt, "--to")}
+    if trlib.base_lang(langs["originals"]) == trlib.base_lang(langs["translations"]):
+        sys.exit(f"--from and --to are both {trlib.base_lang(langs['originals'])}")
+    roots = {"originals": os.path.abspath(a.originals),
+             "translations": os.path.abspath(a.translations)}
+    for side, top in roots.items():
+        if not os.path.isdir(top):
+            sys.exit(f"{side}: {top} is not a folder")
+    if trlib._under(roots["originals"], roots["translations"]) or \
+            trlib._under(roots["translations"], roots["originals"]):
+        sys.exit(f"{roots['originals']} and {roots['translations']} overlap: name "
+                 f"one folder of originals and a separate one of translations")
+    into = destination(a.into, roots["originals"])
+    if any(trlib._under(into, top) for top in roots.values()):
+        sys.exit(f"{into} is inside a folder being read: the copies go elsewhere, "
+                 f"and the archive is not touched")
+    rows = plan(roots, langs, into)
+
+    for side, top in roots.items():
+        print(f"  {side:12}  {top}  ({langs[side]})")
+    print(f"  {'into':12}  {into}\n")
+    copy = [r for r in rows if r[3] is None]
+    labelled = sum(os.path.basename(r[1]) != os.path.basename(r[2]) for r in copy)
+    print(f"  copy {len(copy)} ({labelled} labelled)   pairs {pairs(rows, langs)}"
+          f"   not copied {len(rows) - len(copy)}")
+    for r in rows:
+        if r[3] is not None:
+            print(f"      {r[0]:12}  {os.path.relpath(r[1], roots[r[0]])}   {r[3]}")
+    unread = collections.Counter(os.path.splitext(r[2])[1].lower() or "(none)"
+                                 for r in copy if not r[2].lower().endswith(trref.EXTS))
+    if unread:
+        kinds = ", ".join(f"{ext} {count}" for ext, count in unread.most_common())
+        print(f"  tr-ref cannot read {sum(unread.values())} of them: {kinds} - "
+              f"save those as .docx, .pdf or .txt")
+
+    if not a.apply:
+        print("\n  nothing copied - run again with --apply")
+        return 0
+    done = 0
+    for r in copy:
+        target = os.path.join(into, r[2])
+        if os.path.exists(target):
+            continue
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        shutil.copy2(r[1], target)
+        done += 1
+    print(f"\n  copied {done} file(s)\n  next: tr-ref")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
