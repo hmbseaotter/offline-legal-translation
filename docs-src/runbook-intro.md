@@ -60,6 +60,14 @@ when that model is not installed, instead of writing a failed translation
 for every segment. Set the pair before step 3: triage keeps only the files
 in `TR_SRC`, and counts only those toward the volume.
 
+**German has variants.** `TR_TGT=de` is German as written in Germany, and
+`de-DE` means the same. `de-AT` and `de-CH` are recognised — `tr-ref` files
+references in them and `tr-terms --reference` reads them — but `tr-run`
+refuses to draft into them until their conventions are built: Swiss German
+writes ss for ß and spells amounts and times its own way, and a draft made
+by Germany's rules would read as finished. `TR_SRC` never takes a variant;
+a Swiss German source is `de`.
+
 **2. Copy the client's drop into `source/`, preserving its folder
 structure.** Filenames and the shape of the tree are reproduced in
 `translated/`, so the structure you create here is the structure you
@@ -85,6 +93,12 @@ in any case, and the two files may be different formats. It names a
 language, not which side was the original, so the same pair serves
 English→German and German→English work. A file with no suffix is listed
 and skipped, never guessed.
+
+German takes a variant after a hyphen — `_German-CH`, `_German-AT`, and
+`_German` or `_German-DE` for Germany — so one original beside a Germany and
+a Swiss translation makes two pairs. A German translation is reused only in
+a project whose `TR_TGT` is its variant; one in another variant is lined up
+and listed in `pairs.tsv`, but never reused.
 
 **3. Classify every file by source language.**
 

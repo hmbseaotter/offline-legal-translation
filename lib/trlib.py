@@ -249,6 +249,105 @@ def project_name():
 OLLAMA = os.environ.get("TR_OLLAMA", "http://127.0.0.1:11434")
 NUM_CTX = int(os.environ.get("TR_NUM_CTX", "8192"))
 
+# ------------------------------------------------------- language variants
+
+# German is written differently in Germany, Austria and Switzerland, and a
+# deliverable shows it: Switzerland writes ss where Germany writes ß, and
+# spells amounts and times its own way. A project names its variant in
+# TR_TGT: de-DE, de-AT or de-CH.
+#
+# Plain de is Germany, and so is de-DE; lang_code() turns both into "de". The
+# memory keys on the direction, and an English->German project already has a
+# memory written under en-de. Were de-DE a spelling of its own, setting it
+# would file the same work under a new direction and find none of what is
+# already there.
+#
+# Only the target takes a variant. tr-inventory labels every German file de,
+# and tr-run compares that label with TR_SRC as text, so a TR_SRC of de-CH
+# would hold back the whole drop.
+VARIANTS = {"de": ("DE", "AT", "CH")}      # the first is what the bare code means
+
+# The variants a draft can be made in, beyond each language's first. None
+# yet: the prompt, the conversion of dates, amounts and times, and the
+# spelling all follow Germany, and a Swiss draft made by those rules would
+# read as finished. References in every variant are filed by tr-ref and read
+# by tr-terms already.
+VARIANTS_DRAFTED = set()
+
+_LANG_RE = re.compile(r"([A-Za-z]{2})(?:[-_]([A-Za-z]{2}))?")
+
+
+def lang_code(code):
+    """One spelling for a language setting: 'de' and 'de-DE' give 'de',
+    'de_ch' gives 'de-CH', 'en' gives 'en'. None when the setting names a
+    variant its language does not have, or is not a language code at all."""
+    m = _LANG_RE.fullmatch((code or "").strip())
+    if not m:
+        return None
+    lang, region = m.group(1).lower(), (m.group(2) or "").upper()
+    if not region:
+        return lang
+    known = VARIANTS.get(lang, ())
+    if region not in known:
+        return None
+    return lang if region == known[0] else f"{lang}-{region}"
+
+
+def base_lang(code):
+    """The language without its variant: 'de' for 'de-CH'."""
+    return (code or "").replace("_", "-").split("-", 1)[0].lower()
+
+
+def split_direction(direction):
+    """(source, target) for a direction: ('en', 'de-CH') for 'en-de-CH'.
+
+    Split at the first hyphen only, because only the target has a variant.
+    Taking the first two parts, as _key(), tm_put() and tr-lint each did,
+    would read en-de-CH as en-de: a Swiss segment keyed under Germany's
+    prompt version, where a Germany run would find and reuse it.
+    """
+    s, _, t = (direction or "").partition("-")
+    return s, t
+
+
+def project_pair(src=None, tgt=None):
+    """(source, target) in lang_code()'s spelling, from TR_SRC and TR_TGT
+    unless given. Exits naming the setting when either cannot be read."""
+    src = os.environ.get("TR_SRC", "sl") if src is None else src
+    tgt = os.environ.get("TR_TGT", "en") if tgt is None else tgt
+    if not re.fullmatch(r"[a-z]{2}", src):
+        sys.exit(f"TR_SRC is {src!r}. Name the source language alone - "
+                 f"{', '.join(LANG)}. Only TR_TGT takes a variant, such as de-CH.")
+    t = lang_code(tgt)
+    if t is None:
+        variants = ", ".join(f"{lang}-{r}" for lang, rs in VARIANTS.items()
+                             for r in rs)
+        sys.exit(f"TR_TGT is {tgt!r}, which is no language or variant this kit "
+                 f"knows. The languages are {', '.join(LANG)}; the variants "
+                 f"are {variants}.")
+    return src, t
+
+
+def translation_pair(src=None, tgt=None):
+    """project_pair(), refusing a target no draft can be made in yet."""
+    s, t = project_pair(src, tgt)
+    if t != base_lang(t) and t not in VARIANTS_DRAFTED:
+        sys.exit(f"TR_TGT is {t}, and drafting into it is not built yet: the "
+                 f"prompt, the conversion of dates, amounts and times, and the "
+                 f"spelling all follow Germany, and a draft made by those rules "
+                 f"would read as finished.\n"
+                 f"tr-ref and tr-terms --reference already work for {t}. "
+                 f"For Germany, set TR_TGT=de.")
+    return s, t
+
+
+def _env_target():
+    """TR_TGT in lang_code()'s spelling, or as written when it cannot be read:
+    for the values worked out on import, which report and must not exit."""
+    t = os.environ.get("TR_TGT", "en")
+    return lang_code(t) or t
+
+
 # Which model translates which pair.
 #
 # GaMS3 is continually pretrained on Slovene, English, Bosnian, Serbian and
@@ -275,8 +374,10 @@ PAIR_MODELS = {
 
 
 def model_for(src_lang, tgt_lang):
-    """TR_MODEL when set; otherwise the model routed for the pair, or ""."""
-    return os.environ.get("TR_MODEL") or PAIR_MODELS.get((src_lang, tgt_lang), "")
+    """TR_MODEL when set; otherwise the model routed for the pair, or "".
+    Routed by language, so a variant goes to its language's model."""
+    return os.environ.get("TR_MODEL") or PAIR_MODELS.get(
+        (base_lang(src_lang), base_lang(tgt_lang)), "")
 
 
 def require_model(src_lang, tgt_lang):
@@ -289,7 +390,7 @@ def require_model(src_lang, tgt_lang):
 
 
 # The model for this project's pair, for the tools that report on one.
-MODEL = model_for(os.environ.get("TR_SRC", "sl"), os.environ.get("TR_TGT", "en"))
+MODEL = model_for(os.environ.get("TR_SRC", "sl"), _env_target())
 
 # Seconds per segment, end to end, by model. Measured on this machine, never
 # estimated from a tokens-per-second figure: that was optimistic by ~5x,
@@ -994,7 +1095,7 @@ def _key(src, direction, gloss_sig=""):
     # The model and prompt version routed for THIS direction, not the
     # project's. A worker can be pointed at another pair with --from/--to,
     # and its segments must not be filed under the project's model.
-    s, t = (direction.split("-") + ["", ""])[:2]
+    s, t = split_direction(direction)
     model, version = model_for(s, t), prompt_version(s, t)
     h = hashlib.sha256()
     if gloss_sig:
@@ -1035,7 +1136,7 @@ def tm_get(src, direction, gloss_sig=""):
     return r[0] if r else None
 
 def tm_put(src, tgt, direction, gloss_sig=""):
-    s, t = (direction.split("-") + ["", ""])[:2]
+    s, t = split_direction(direction)
     db = _db()
     db.execute("INSERT OR REPLACE INTO tm VALUES(?,?,?,?,?,?,?)",
                (_key(src, direction, gloss_sig), src, tgt, direction,
@@ -1194,8 +1295,7 @@ def prompt_version(src_lang, tgt_lang):
 
 
 # The version for this project's pair, for the tools that report on one.
-PROMPT_VERSION = prompt_version(os.environ.get("TR_SRC", "sl"),
-                                os.environ.get("TR_TGT", "en"))
+PROMPT_VERSION = prompt_version(os.environ.get("TR_SRC", "sl"), _env_target())
 
 # A Slovene amount: optional period-grouped thousands, comma decimal, one or
 # two decimal digits. The lookarounds keep it from starting or ending inside a
@@ -1351,6 +1451,12 @@ def reference_translation(text, direction):
 
 
 def ollama_translate(text, src_lang, tgt_lang, gloss=None, retries=3):
+    # Every draft and every memory row passes through here or through
+    # ollama_translate_many(), so the pair is settled here as well as in the
+    # workers, for any caller that did not. Written de-DE, a target selects
+    # none of the German rules from the prompt and keys its rows under a
+    # direction no Germany run reads.
+    src_lang, tgt_lang = translation_pair(src_lang, tgt_lang)
     if not is_translatable(text):
         # Not model work, but not necessarily unchanged either: a segment that
         # is only a date or an amount still gets its locale converted.
@@ -1505,6 +1611,7 @@ def ollama_translate_many(texts, src_lang, tgt_lang, gloss=None, report=None):
     an interrupted run loses nothing extra, and tr-lint sees exactly what it
     saw before.
     """
+    src_lang, tgt_lang = translation_pair(src_lang, tgt_lang)   # see ollama_translate()
     direction = f"{src_lang}-{tgt_lang}"
     out = [None] * len(texts)
     pending = []

@@ -63,6 +63,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# The pair is settled before anything is listed or promised. A German
+# variant whose rules are not built is refused here, once, rather than by
+# each worker in turn -- which would record every file as FAILED.
+python3 - "$BIN/../lib" <<'PY' || exit 2
+import sys
+sys.path.insert(0, sys.argv[1])
+import trlib
+trlib.translation_pair()
+PY
+
 # Deliverable names come from trlib.target_name, not from a second copy of
 # the rule.
 #

@@ -84,6 +84,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "lib"))
 import trlib  # noqa: E402
+import trref  # noqa: E402
 
 # Function words carry no terminology and would dominate every count.
 SL_STOP = {
@@ -182,10 +183,9 @@ def main():
                          "translations, instead of the model's drafts")
     a = ap.parse_args()
 
-    src_lang = os.environ.get("TR_SRC", "sl")
-    tgt_lang = os.environ.get("TR_TGT", "en")
-    sstop = STOP.get(src_lang, EN_STOP)
-    tstop = STOP.get(tgt_lang, EN_STOP)
+    src_lang, tgt_lang = trlib.project_pair()
+    sstop = STOP.get(trlib.base_lang(src_lang), EN_STOP)
+    tstop = STOP.get(trlib.base_lang(tgt_lang), EN_STOP)
     gloss = trlib.load_glossary()
 
     if a.reference:
@@ -194,11 +194,14 @@ def main():
             sys.exit("no reference pairs yet - put the files in reference/ "
                      "and run tr-ref first")
         rdb = sqlite3.connect(refp)
-        rows = rdb.execute("SELECT src, tgt FROM pairs WHERE direction = ?",
-                           (f"{src_lang}-{tgt_lang}",)).fetchall()
+        # This project's variant only: a Germany translation would propose
+        # Straße to a Swiss glossary.
+        direction = f"{src_lang}-{tgt_lang}"
+        rows = [(s, t) for d, _doc, s, _sn, t, _how, _r
+                in trref.kept(rdb, direction) if d == direction]
         rdb.close()
         if not rows:
-            sys.exit(f"tr-ref kept no {src_lang}-{tgt_lang} sentence pairs - "
+            sys.exit(f"tr-ref kept no {direction} sentence pairs - "
                      f"see work/reference/rejected.tsv for why")
         return harvest(a, rows, gloss, sstop, tstop,
                        "from reference translations",

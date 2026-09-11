@@ -24,6 +24,10 @@ def main():
     ap.add_argument("--cols", default=None)
     ap.add_argument("--survey", action="store_true")
     a = ap.parse_args()
+    # A survey sizes the job and translates nothing, so it runs for a variant
+    # no draft can be made in yet.
+    pair = trlib.project_pair if a.survey or not a.out else trlib.translation_pair
+    a.src, a.tgt = pair(a.src, a.tgt)
 
     cols = None
     if a.cols:

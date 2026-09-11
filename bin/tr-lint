@@ -125,7 +125,7 @@ def main():
                 # patterns but are required to change -- checking only for
                 # the source spelling reported every converted date as
                 # dropped, which is the same false alarm the NUM check had.
-                sl, tl = (direction.split("-") + ["", ""])[:2]
+                sl, tl = trlib.split_direction(direction)
                 want = trlib.localize(frag, sl, tl)
                 if frag not in tgt and (want == frag or want not in tgt):
                     findings.append(("NONTR", f"'{frag}' altered or dropped", src, tgt))

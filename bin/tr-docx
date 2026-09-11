@@ -79,6 +79,7 @@ def main():
     ap.add_argument("--from", dest="src", default=os.environ.get("TR_SRC", "sl"))
     ap.add_argument("--to", dest="tgt", default=os.environ.get("TR_TGT", "en"))
     a = ap.parse_args()
+    a.src, a.tgt = trlib.translation_pair(a.src, a.tgt)
 
     gloss = trlib.load_glossary()
     doc = docx.Document(a.inp)

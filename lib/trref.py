@@ -16,6 +16,10 @@ underscore-separated part before the extension: _English, _German, _Slovene,
 or _EN, _DE, _SL, in any case. The extensions may differ, so a Word original
 pairs with a PDF translation.
 
+German takes a variant after a hyphen: _German-CH, _German-AT, and _German
+or _German-DE for Germany. One English original can sit beside a Germany and
+a Swiss translation, and each makes a pair of its own.
+
 The suffix names a language, not a role. Which side is the source is the
 project's TR_SRC, so the same pair serves an English->German matter and a
 German->English one. A file with no suffix is listed and skipped: guessing its
@@ -54,6 +58,13 @@ two human renderings is the translator's decision, and tr-ref lists them. And
 a translation read by OCR is never reused verbatim, because an OCR misreading
 would pass straight into a deliverable; such pairs still count for
 terminology, where a person reads every proposal.
+
+A German translation is reused only in a project writing its variant: a
+Swiss one where TR_TGT is de-CH, a Germany one where it is de. Renderings in
+two variants differ as a matter of course, so one in the other variant is
+neither reused nor counted as a disagreement. The variant matters on the
+target side only; a German->English project reuses a pair whatever German
+its source is written in.
 """
 import collections
 import math
@@ -86,59 +97,94 @@ def norm(s):
 
 # ------------------------------------------------------------------ pairing
 
-# The language suffix: the last underscore-separated part of a file's name.
+# The language suffix: the last underscore-separated part of a file's name,
+# with a variant after a hyphen where the language has them: _German-CH.
 SUFFIX_LANG = {
     "english": "en", "en": "en",
     "german": "de", "deutsch": "de", "de": "de",
     "slovene": "sl", "slovenian": "sl", "sl": "sl",
 }
-_SUFFIX_RE = re.compile(r"^(?P<stem>.+)_(?P<lang>[A-Za-z]+)$")
+_SUFFIX_RE = re.compile(
+    r"^(?P<stem>.+)_(?P<lang>[A-Za-z]+)(?:-(?P<region>[A-Za-z]{2}))?$")
 
 
 def file_language(name):
-    """(stem, language) for 'lease-2023_German.pdf', or (None, None)."""
+    """(stem, language) for 'lease-2023_German-CH.pdf', or (None, None).
+
+    The language in trlib.lang_code()'s spelling: 'de-CH' here, and plain
+    'de' for _German and _German-DE alike. A variant the language does not
+    have -- _English-GB, _German-XX -- counts as no suffix, so the file is
+    listed as unlabelled rather than filed as something it may not be.
+    """
     m = _SUFFIX_RE.match(os.path.splitext(name)[0])
     lang = SUFFIX_LANG.get(m.group("lang").lower()) if m else None
+    if lang and m.group("region"):
+        lang = trlib.lang_code(f"{lang}-{m.group('region')}")
     return (m.group("stem"), lang) if lang else (None, None)
+
+
+def _label(doc, lang):
+    """A document's name, with its variant when that is not the language's
+    first: 'leases/lease-2023 (de-CH)' beside 'leases/lease-2023'."""
+    return f"{doc} ({lang})" if "-" in lang else doc
 
 
 def find_pairs(src_lang, tgt_lang):
     """What is under the project's reference/ folder, sorted into pairs.
 
-    pairs       [(doc, src_path, tgt_path)], doc being folder/name, suffix off
+    pairs       [(doc, src_path, tgt_path, variant)], doc being folder/name,
+                suffix off, and variant the German side's when it is not
+                Germany -- 'de-CH' -- or ''. A Swiss pair's doc carries its
+                variant, so it is a document of its own beside Germany's
     unpaired    [path] with a language suffix but no counterpart
-    ambiguous   [doc] with two files in one language (a_German.docx, a_German.pdf)
+    ambiguous   [doc] with two files in one language and variant
+                (a_German.docx, a_German.pdf)
     unlabelled  [path] with no language suffix
     other       [path] in a language outside this project's pair
     """
     root = trlib.path("reference")
+    src_lang, tgt_lang = trlib.base_lang(src_lang), trlib.base_lang(tgt_lang)
+    # Each side keyed by name and variant: one original pairs with a Germany
+    # translation and a Swiss one, and two files are ambiguous only when they
+    # share both.
     sides = {src_lang: {}, tgt_lang: {}}
-    ambiguous, unlabelled, other = set(), [], []
+    amb, unlabelled, other = set(), [], []
     for dp, _dirs, files in os.walk(root):
         for f in sorted(files):
             if f.startswith((".", "~$")) or not f.lower().endswith(EXTS):
                 continue
             full = os.path.join(dp, f)
-            stem, lang = file_language(f)
-            if not lang:
+            stem, code = file_language(f)
+            if not code:
                 unlabelled.append(full)
                 continue
+            lang = trlib.base_lang(code)
             if lang not in sides:
                 other.append(full)
                 continue
             doc = os.path.normpath(os.path.join(os.path.relpath(dp, root), stem))
-            key = doc.casefold()           # Lease_English pairs with lease_German
+            key = (doc.casefold(), code)   # Lease_English pairs with lease_German
             if key in sides[lang]:
-                ambiguous.add(doc)
+                amb.add((lang, key))
             sides[lang][key] = (doc, full)
     s, t = sides[src_lang], sides[tgt_lang]
-    amb = {d.casefold() for d in ambiguous}
-    pairs = [(s[k][0], s[k][1], t[k][1]) for k in sorted(s)
-             if k in t and k not in amb]
-    unpaired = sorted([s[k][1] for k in s if k not in t] +
-                      [t[k][1] for k in t if k not in s])
-    return (pairs, unpaired, sorted(ambiguous), sorted(unlabelled),
-            sorted(other))
+    t_codes = collections.defaultdict(list)
+    for name, code in sorted(t):
+        t_codes[name].append(code)
+    pairs = []
+    for name, scode in sorted(s):
+        for tcode in t_codes.get(name, ()):
+            if (src_lang, (name, scode)) in amb or (tgt_lang, (name, tcode)) in amb:
+                continue
+            variant = scode if "-" in scode else tcode if "-" in tcode else ""
+            pairs.append((_label(s[(name, scode)][0], variant),
+                          s[(name, scode)][1], t[(name, tcode)][1], variant))
+    s_names = {name for name, _code in s}
+    unpaired = sorted(
+        [p for (name, _c), (_d, p) in s.items() if name not in t_codes] +
+        [p for (name, _c), (_d, p) in t.items() if name not in s_names])
+    ambiguous = sorted({_label(sides[lang][key][0], key[1]) for lang, key in amb})
+    return pairs, unpaired, ambiguous, sorted(unlabelled), sorted(other)
 
 
 def signature(*paths):
@@ -388,12 +434,20 @@ def store_path():
     return trlib.path("work", "reference.sqlite")
 
 
+def _has_variant(db):
+    return "variant" in {r[1] for r in db.execute("PRAGMA table_info(pairs)")}
+
+
 def open_store():
     os.makedirs(trlib.path("work"), exist_ok=True)
     db = sqlite3.connect(store_path(), timeout=60)
     db.execute("""CREATE TABLE IF NOT EXISTS pairs(
         direction TEXT, doc TEXT, src TEXT, src_norm TEXT, tgt TEXT,
-        how TEXT, reusable INTEGER)""")
+        how TEXT, reusable INTEGER, variant TEXT NOT NULL DEFAULT '')""")
+    if not _has_variant(db):
+        # A store written before variants. Every German file in it was named
+        # without one, and a German suffix without a variant is Germany.
+        db.execute("ALTER TABLE pairs ADD COLUMN variant TEXT NOT NULL DEFAULT ''")
     db.execute("CREATE INDEX IF NOT EXISTS pairs_src ON pairs(direction, src_norm)")
     db.execute("""CREATE TABLE IF NOT EXISTS docs(
         direction TEXT, doc TEXT, signature TEXT, kept INTEGER,
@@ -401,15 +455,54 @@ def open_store():
     return db
 
 
+def reuse_direction(direction, variant):
+    """The direction a kept pair is reused in.
+
+    Pairs are aligned and stored per language pair: a Swiss translation of an
+    English original under en-de, beside Germany's. Where the German side is
+    the target and not Germany's, the pair is reused only in its variant's
+    own direction, en-de-CH -- the direction tr-run translates in when
+    TR_TGT is de-CH. Every other pair is reused in the direction it is stored
+    under, so a German->English project takes a sentence whichever German its
+    source was written in.
+    """
+    s, t = trlib.split_direction(direction)
+    return f"{s}-{variant}" if variant and trlib.base_lang(variant) == t \
+        else direction
+
+
+def kept(db, direction=None):
+    """(reuse direction, doc, src, src_norm, tgt, how, reusable) for each kept
+    pair, in document order. Given a direction, only the pairs stored for its
+    language pair -- in every variant, so a caller wanting one variant
+    compares the first field. Reads a store from before variants as Germany's.
+    """
+    variant = "variant" if _has_variant(db) else "''"
+    sql = (f"SELECT direction, doc, src, src_norm, tgt, how, reusable, {variant} "
+           f"FROM pairs")
+    args = ()
+    if direction:
+        s, t = trlib.split_direction(direction)
+        sql, args = sql + " WHERE direction = ?", (f"{s}-{trlib.base_lang(t)}",)
+    for d, doc, src, src_norm, tgt, how, reusable, var in db.execute(
+            sql + " ORDER BY doc, rowid", args):
+        yield reuse_direction(d, var), doc, src, src_norm, tgt, how, reusable
+
+
 def load_reuse():
-    """{direction: {normalised source: translation}}, reusable and agreed only."""
+    """{direction: {normalised source: translation}}, reusable and agreed only.
+
+    Agreement is counted within a reuse direction. A Swiss rendering and
+    Germany's differ as a matter of course -- ss for ß, if nothing else -- so
+    neither is a disagreement with the other; each is simply not reused in
+    the other's direction.
+    """
     if not os.path.exists(store_path()):
         return {}
     db = sqlite3.connect(store_path(), timeout=60)
     seen = collections.defaultdict(set)
     usable = set()
-    for direction, src_norm, tgt, reusable in db.execute(
-            "SELECT direction, src_norm, tgt, reusable FROM pairs"):
+    for direction, _doc, _src, src_norm, tgt, _how, reusable in kept(db):
         seen[(direction, src_norm)].add(norm(tgt))
         if reusable:
             usable.add((direction, src_norm, tgt))
@@ -422,9 +515,10 @@ def load_reuse():
 
 
 def conflicts(db, direction):
-    """[(source, [translations])] the references render more than one way."""
+    """[(source, [translations])] the references reused in direction render
+    more than one way."""
     by = collections.defaultdict(set)
-    for src_norm, tgt in db.execute(
-            "SELECT src_norm, tgt FROM pairs WHERE direction = ?", (direction,)):
-        by[src_norm].add(norm(tgt))
+    for d, _doc, _src, src_norm, tgt, _how, _reusable in kept(db, direction):
+        if d == direction:
+            by[src_norm].add(norm(tgt))
     return sorted((s, sorted(ts)) for s, ts in by.items() if len(ts) > 1)

@@ -21,6 +21,7 @@ def main():
     ap.add_argument("--to", dest="tgt", default=os.environ.get("TR_TGT", "en"))
     ap.add_argument("--bilingual", action="store_true")
     a = ap.parse_args()
+    a.src, a.tgt = trlib.translation_pair(a.src, a.tgt)
 
     raw = open(a.inp, encoding="utf-8", errors="replace").read()
     blocks = [b.strip() for b in raw.split("\n\n") if b.strip()]
