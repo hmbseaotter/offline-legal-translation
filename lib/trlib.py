@@ -930,6 +930,8 @@ def _en_to_de(s):
 # money. As in Germany, a time on its own gets no "Uhr".
 
 NBSP = "\u00a0"
+# A word joiner: no width, and no line break on either side of it.
+WJ = "\u2060"
 _CURRENCY = r"CHF|Fr\.|EUR|USD|GBP|SIT|€|\$|£"
 _CH_AMOUNT = re.compile(rf"^\s*(?:(?P<pre>{_CURRENCY})\s*(?P<a>[\d.,]+)"
                         rf"|(?P<b>[\d.,]+)\s*(?P<post>{_CURRENCY}))\s*$")
@@ -971,7 +973,7 @@ def _en_to_ch(s):
             return None
         integer, _, fraction = number.partition(".")
         if currency in ("CHF", "Fr.") and not fraction.strip("0"):
-            return f"Fr. {integer}.–"
+            return f"Fr.{NBSP}{integer}.{WJ}–"     # one line: _whole_francs()
         return f"{currency} {number}"
     return _swiss_number(s, money=False)
 
@@ -1109,7 +1111,7 @@ def _to24(m):
 # "Bahnhofstrasse 12 8001" has no group of exactly three digits after the 12.
 _GROUPED = re.compile(
     r"(?<![\d.,'’])(\d{1,3})((?:[ \u00a0\u202f\u2009'’]\d{3})+)(?!\d)")
-_WHOLE_AMOUNT = re.compile(r"(\d)[.,][–-](?!\d)")
+_WHOLE_AMOUNT = re.compile(r"(\d)[.,]\u2060?[–-](?!\d)")
 
 
 def canon_locale(s):
@@ -1537,14 +1539,26 @@ def _swiss_spacing(text):
     return _SPACED_GROUPS.sub(nbsp, text)
 
 
+_WHOLE_FRANCS = re.compile(
+    r"\bFr\.[ \u00a0]?(\d{1,3}(?:[ \u00a0]\d{3})*|\d+)\.\u2060?–")
+
+
+def _whole_francs(text):
+    """Fr. 20.– held on one line: a no-break space after Fr., and a word
+    joiner before the dash. Without them LibreOffice set "Fr. 20." at the end
+    of a line and the dash at the start of the next; with the joiner alone it
+    left Fr. behind instead."""
+    return _WHOLE_FRANCS.sub(lambda m: f"Fr.{NBSP}{m.group(1)}.{WJ}–", text)
+
+
 def finish_draft(src, tgt, src_lang, tgt_lang):
     """A model reply made ready to store: its number format fixed and, in
-    Swiss German, its digit groups held together and ß written ss. Every
-    draft passes through here before it enters the memory, so the memory
-    holds what the deliverable shows."""
+    Swiss German, its digit groups and whole franc amounts held together and
+    ß written ss. Every draft passes through here before it enters the
+    memory, so the memory holds what the deliverable shows."""
     tgt = fix_numeric_format(src, tgt, src_lang, tgt_lang)
     if tgt and tgt_lang == "de-CH":
-        tgt = swiss_spelling(src, _swiss_spacing(tgt))
+        tgt = swiss_spelling(src, _whole_francs(_swiss_spacing(tgt)))
     return tgt
 
 
