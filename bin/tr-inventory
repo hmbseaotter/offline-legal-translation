@@ -215,6 +215,25 @@ def from_pdf(path, allow_ocr=True, limit=SAMPLE_WORDS, full_ocr=False):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _why(r, limit=120):
+    """The last thing tr-pdf said before it failed, as one line.
+
+    A failed OCR recorded "tr-pdf exit 7" and nothing else, and an AppArmor
+    denial, a missing ocrmypdf and a damaged PDF all look like that from the
+    manifest: finding out which meant running tr-pdf again by hand, which is
+    not what an operator reading a manifest has in mind. The manifest already
+    carries paths, so it is no worse a place for the reason than for those.
+    One line with its spacing collapsed, because this is a TSV column.
+    """
+    for stream in (r.stderr, r.stdout):
+        lines = [" ".join(ln.split())
+                 for ln in (stream or b"").decode("utf-8", "replace").splitlines()
+                 if ln.strip()]
+        if lines:
+            return " - " + lines[-1][:limit]
+    return ""
+
+
 def _full_ocr(path, limit):
     """Real OCR pass, done by tr-pdf so there is one way to make a text layer.
 
@@ -237,7 +256,7 @@ def _full_ocr(path, limit):
         return "", f"pdf-ocr-failed: {type(e).__name__}"
     cached = _ocr_cache(path)
     if r.returncode != 0 or not cached:
-        return "", f"pdf-ocr-failed: tr-pdf exit {r.returncode}"
+        return "", f"pdf-ocr-failed: tr-pdf exit {r.returncode}{_why(r)}"
     with open(cached, encoding="utf-8", errors="replace") as fh:
         return _cap(fh.read().split(), limit), "pdf-ocr-full"
 

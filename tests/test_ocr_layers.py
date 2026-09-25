@@ -158,6 +158,23 @@ exec {shutil.which("gs")} "$@"
         wrote = [c[c.index("-o") + 1] for c in calls if "-o" in c]
         self.assertTrue(wrote and all(os.path.splitext(w)[1] for w in wrote), wrote)
 
+    def test_a_failed_ocr_records_why_it_failed(self):
+        """"tr-pdf exit 7" alone sent an operator back to run tr-pdf by hand:
+        an AppArmor denial, a missing ocrmypdf and a damaged PDF all read the
+        same from the manifest."""
+        if not support.can_scan():
+            self.skipTest("needs ocrmypdf, tesseract, pdftoppm and img2pdf")
+        root = support.project("ocr-why", "sl", "en")
+        support.image_pdf(f"{root}/source/scan.pdf", LINES)
+        env = dict(os.environ, TR_ROOT=root, PATH=path_without("ocrmypdf"))
+        subprocess.run([os.path.join(support.BIN, "tr-inventory"), "--count",
+                        "--with-ocr"], env=env, stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=900)
+        method = manifest(root)["scan.pdf"]["method"]
+        self.assertIn("pdf-ocr-failed", method)
+        self.assertIn("ocrmypdf", method, method)
+        self.assertNotIn("\t", method)
+
 
 if __name__ == "__main__":
     unittest.main()
