@@ -103,6 +103,7 @@ and set, before the first `tr-run`:
 | Lines | For |
 |---|---|
 | `TR_SRC=sl`, `TR_TGT=en`, `TR_OCR_LANGS=slv+eng` | Slovene→English — what `tr-project --new` writes |
+| `TR_SRC=en`, `TR_TGT=sl`, `TR_OCR_LANGS=eng+slv` | English→Slovene — the same model, the other way |
 | `TR_SRC=en`, `TR_TGT=de`, `TR_OCR_LANGS=eng` | English→German; `TR_TGT=de-CH` for Swiss German |
 | `TR_SUFFIX=auto` | Optional: each translation takes its language's label, `lease_German.docx` |
 
@@ -110,6 +111,10 @@ Notes
 
 - Set the pair before step 5: triage keeps only the files in `TR_SRC`, and
   counts only those toward the volume.
+- `TR_OCR_LANGS` names the languages on the page, the one most of it is in
+  first. An English drop in a Slovene matter is `eng+slv`: with `slv+eng`
+  Tesseract read English words through Slovene and corrupted them, and with
+  `eng` alone it mangled `Okrožno sodišče`.
 - Decide the suffix before the first run as well. Changing it later gives
   every deliverable a new name: `tr-status` then lists each source as missing
   and its old translation as orphaned, and `tr-run` drafts them again under
