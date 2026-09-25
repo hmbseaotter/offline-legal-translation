@@ -283,6 +283,34 @@ Notes
   treated as born-digital: Tesseract writes its invisible text in
   `GlyphLessFont`, so the text is OCR of unknown quality, and the file is
   read again here, where at least the confidence of each word is recorded.
+- **The OCR'd PDF kept beside each text layer is a plain PDF, not PDF/A**,
+  and AppArmor is the reason. Ubuntu's profile `gs` (`/etc/apparmor.d/gs`)
+  lets Ghostscript write, under `$HOME`, only files whose extension it knows
+  — `pdf`, `png`, `jpg` and the rest of `@{gs_file_ext}`. Rasterising a page
+  writes `.png` and is allowed; converting to PDF/A first needs a scratch
+  file named `gs_XXXXXX`, which has no extension at all. The container is
+  under `$HOME`, so once the temporary directory moved inside it every scan
+  was read in full and then failed at the last step:
+
+      Could not open temporary file …/work/tmp/trpdf-XXXXXXXX/gs_XXXXXX
+      SubprocessOutputError: Ghostscript PDF/A rendering failed
+      pdf-ocr-failed: tr-pdf exit 7
+
+  `tr-pdf` asks for `--output-type pdf`, which needs no scratch file.
+  Nothing reads that PDF as a document — `tr-ocrtext` rasterises it and
+  reads it again for the per-word confidence — and it is never delivered,
+  so the conformance was for an artefact that stays in the container. If a
+  matter ever needs PDF/A, permit the scratch file rather than moving OCR
+  back out of the container:
+
+      printf 'owner @{HOME}/translation-work/confidential-projects/**/work/tmp/** rwk,\n' \
+        | sudo tee /etc/apparmor.d/local/gs
+      sudo apparmor_parser -r /etc/apparmor.d/gs
+
+  and put `--output-type pdfa` back in `tr-pdf`. The trade is that a crafted
+  PDF, which is what the profile guards against, could then reach that
+  scratch directory. Untested here: it needs root, and the override was not
+  applied on this machine.
 
 #### 7. Check the OCR
 

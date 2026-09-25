@@ -1,8 +1,10 @@
 """OCR text layers: one made without confidence marking is read again under
 --with-ocr, but never in a loop and never over a copy set aside before; the
 layer's name does not depend on how a path is spelled; tr-ocrstat names what
-it cannot measure; and a language recorded as unknown gives way once a scan
-is read. Audit 2026-09-10: H-1, M-12, M-13, M-14."""
+it cannot measure; a language recorded as unknown gives way once a scan is
+read; and the OCR path asks nothing of Ghostscript, which AppArmor forbids
+to write under $HOME, where the container is. Audit 2026-09-10: H-1, M-12,
+M-13, M-14; 2026-09-25: every scan in the container failed at the PDF/A pass."""
 import support  # noqa: F401  -- before trlib: sets the environment it reads
 
 import csv
@@ -124,6 +126,37 @@ class OcrLayers(unittest.TestCase):
         code, out = support.run("tr-inventory", root, "--count", "--with-ocr")
         self.assertEqual(code, 0, out)
         self.assertEqual(manifest(root)["scan.pdf"]["lang"], "sl", out)
+
+    def test_no_pdfa_conversion_is_asked_of_ghostscript(self):
+        """AppArmor's "gs" profile permits Ghostscript, under $HOME, only
+        files whose extension it knows. Rasterizing is fine -- those are
+        .png -- but the PDF/A pass needs a scratch file named gs_XXXXXX,
+        which has no extension, so inside the container it fails after every
+        page has been read. The shim records what Ghostscript is asked to do
+        and then does it."""
+        if not (support.can_scan() and shutil.which("gs")):
+            self.skipTest("needs ocrmypdf, tesseract, pdftoppm, img2pdf and gs")
+        root = support.project("gs-calls", "sl", "en")
+        support.image_pdf(f"{root}/source/scan.pdf", LINES)
+        shim = tempfile.mkdtemp(prefix="gs-shim-", dir=support.ROOT)
+        asked = os.path.join(shim, "asked")
+        support.write_text(os.path.join(shim, "gs"), f"""#!/bin/sh
+printf '%s\\n' "$*" >> {asked}
+exec {shutil.which("gs")} "$@"
+""")
+        os.chmod(os.path.join(shim, "gs"), 0o755)
+        out = self.tr_pdf(root, f"{root}/source/scan.pdf",
+                          path=shim + os.pathsep + os.environ["PATH"])
+        self.assertGreater(len(read(f"{root}/work/ocr/scan.txt").split()), 20, out)
+        calls = [c.split() for c in read(asked).splitlines()]
+        pdfa = [" ".join(c) for c in calls if any(
+            t.startswith("-dPDFA") or t.endswith("PDFA_def.ps") for t in c)]
+        self.assertEqual(pdfa, [], "the PDF/A pass is back")
+        # What the profile actually allows under $HOME is a file whose
+        # extension it knows. Rasterizing writes .png and .jpg; the scratch
+        # file of a PDF/A conversion has no extension at all.
+        wrote = [c[c.index("-o") + 1] for c in calls if "-o" in c]
+        self.assertTrue(wrote and all(os.path.splitext(w)[1] for w in wrote), wrote)
 
 
 if __name__ == "__main__":

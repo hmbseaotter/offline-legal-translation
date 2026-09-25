@@ -165,8 +165,25 @@ if [[ ! -f "$txt" ]]; then
       # is processed rather than refused. Not --redo-ocr, which ocrmypdf
       # rejects alongside --deskew and --clean, and those are what make a
       # crooked scan readable in the first place.
+      # --output-type pdf, not pdfa. The PDF/A conversion is a Ghostscript
+      # pass, and it is the only work Ghostscript does in this pipeline.
+      # Ubuntu's AppArmor profile "gs" permits it, under $HOME, only files
+      # whose extension is in @{gs_file_ext}; its own scratch file is named
+      # gs_XXXXXX and has none. So once the temporary directory moved inside
+      # the container -- $HOME, necessarily -- every scan died with
+      #   Could not open temporary file .../work/tmp/trpdf-XXXXXXXX/gs_XXXXXX
+      # and ocrmypdf exit 7, after OCR'ing every page.
+      #
+      # Nothing here reads the archived PDF as a document: tr-ocrtext renders
+      # it with pdftoppm and reads it again for the per-word confidence,
+      # tr-ref only asks whether it exists, and delivery copies source/ and
+      # translated/. The invisible text layer is written by the OCR step
+      # either way; PDF/A conformance was for an artefact that never leaves
+      # the container. To have it back, permit the scratch file in
+      # /etc/apparmor.d/local/gs and set pdfa here again: the runbook's OCR
+      # step carries the rule to add and what it widens.
       ocrmypdf -l "$LANGS" --rotate-pages --deskew --clean --skip-text \
-               --output-type pdfa --quiet "$IN" "$pdf"
+               --output-type pdf --quiet "$IN" "$pdf"
     else
       echo "  OCR cached: $(basename "$pdf")"
     fi
