@@ -22,28 +22,11 @@ tr_guard_resolve_root \
   "Writing there now would put case material outside the encryption."
 PROJECT="$(basename "$TR_ROOT")"
 
-# Per-project settings (language pair, suffix, OCR languages).
-#
-# Parsed rather than sourced. project.conf is data, and sourcing it both
-# executes whatever it contains and clobbers the environment -- so
-# `TR_SUFFIX=x tr-run` was silently overridden by the file. An explicit
-# environment setting is a deliberate one-off and now wins. lib/trlib.py
-# reads the same file the same way, so the tools invoked directly agree.
-load_conf() {
-  local f="$1" line k v
-  [[ -f "$f" ]] || return 0
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"
-    [[ "$line" == *=* ]] || continue
-    k="${line%%=*}"; v="${line#*=}"
-    read -r k <<< "$k" || true                 # trims surrounding whitespace
-    read -r v <<< "$v" || true
-    [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-    v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
-    [[ -n "${!k+set}" ]] || export "$k=$v"
-  done < "$f"
-}
-load_conf "$TR_ROOT/project.conf"
+# Per-project settings (language pair, suffix, OCR languages). The parse is
+# lib/conf.sh, so tr-pdf reads the same file the same way; lib/trlib.py does
+# it for the Python tools.
+source "$BIN/../lib/conf.sh"
+tr_load_conf "$TR_ROOT/project.conf"
 
 SRC="$TR_ROOT/source"
 OUT="$TR_ROOT/translated"

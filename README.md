@@ -172,7 +172,8 @@ requirement, deliberately and consistently across every tool.
 
 ```
 bin/         the commands
-lib/         trlib.py (shared logic), guard.sh (the mount rule), registry.py
+lib/         trlib.py (shared logic), guard.sh (the mount rule),
+             conf.sh (project.conf, for the shell tools), registry.py
 prompts/     the translation prompt, versioned; part of the cache key
 glossary/    shared base terminology and non-translatable patterns
 tools/       operator utilities, doc generation, test harnesses

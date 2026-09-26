@@ -138,6 +138,19 @@ def can_scan():
                            capture_output=True).returncode == 0
 
 
+def path_without(*tools):
+    """A PATH on which the named tools cannot be found: a directory of links
+    to everything else in the usual bin directories. What a tool does when
+    one of its dependencies is missing is part of what it promises."""
+    d = tempfile.mkdtemp(prefix="bin-", dir=ROOT)
+    for src in ("/usr/local/bin", "/usr/bin", "/bin"):
+        if os.path.isdir(src):
+            for name in os.listdir(src):
+                if name not in tools and not os.path.lexists(os.path.join(d, name)):
+                    os.symlink(os.path.join(src, name), os.path.join(d, name))
+    return d
+
+
 def image_pdf(path, lines):
     """A PDF holding only a picture of the text, as a scanner makes one.
     Built with the system python3's img2pdf, which the kit venv lacks."""

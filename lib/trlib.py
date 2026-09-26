@@ -105,7 +105,8 @@ def _load_project_conf():
     settings and anything invoked directly did not. That is how tr-status
     came to report an entire corpus as missing whenever a project set
     TR_SUFFIX -- tr-run renamed the outputs and tr-status did not know it.
-    Loading the file here means every entry point agrees.
+    Loading the file here means every entry point agrees. lib/conf.sh is
+    the same parse for the shell tools; those two are the only ones.
 
     Parsed rather than sourced: project.conf is data, and sourcing it would
     execute whatever it contains. An explicit environment setting is a

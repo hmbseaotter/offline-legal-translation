@@ -22,18 +22,6 @@ def read(path):
         return fh.read()
 
 
-def path_without(*tools):
-    """A PATH on which the named tools cannot be found: a directory of links
-    to everything else in the usual bin directories."""
-    d = tempfile.mkdtemp(prefix="bin-", dir=support.ROOT)
-    for src in ("/usr/local/bin", "/usr/bin", "/bin"):
-        if os.path.isdir(src):
-            for name in os.listdir(src):
-                if name not in tools and not os.path.lexists(os.path.join(d, name)):
-                    os.symlink(os.path.join(src, name), os.path.join(d, name))
-    return d
-
-
 def manifest(root):
     with open(f"{root}/work/inventory/manifest.tsv", encoding="utf-8") as fh:
         return {row["path"]: row for row in csv.DictReader(fh, delimiter="\t")}
@@ -86,7 +74,7 @@ class OcrLayers(unittest.TestCase):
         # so tr-pdf goes straight to tr-ocrtext.
         support.write_pdf(pdf, ["Kratka izjava prodajalca."])
         shutil.copy(pdf, f"{root}/work/ocr/scan.ocr.pdf")
-        bare = path_without("tesseract", "pdftoppm")
+        bare = support.path_without("tesseract", "pdftoppm")
 
         self.tr_pdf(root, pdf, path=bare)
         self.assertTrue(os.path.exists(layer + ".nomarks"))
@@ -166,7 +154,7 @@ exec {shutil.which("gs")} "$@"
             self.skipTest("needs ocrmypdf, tesseract, pdftoppm and img2pdf")
         root = support.project("ocr-why", "sl", "en")
         support.image_pdf(f"{root}/source/scan.pdf", LINES)
-        env = dict(os.environ, TR_ROOT=root, PATH=path_without("ocrmypdf"))
+        env = dict(os.environ, TR_ROOT=root, PATH=support.path_without("ocrmypdf"))
         subprocess.run([os.path.join(support.BIN, "tr-inventory"), "--count",
                         "--with-ocr"], env=env, stdin=subprocess.DEVNULL,
                        capture_output=True, text=True, timeout=900)

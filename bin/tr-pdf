@@ -17,10 +17,16 @@
 set -euo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$BIN/../lib/guard.sh"
+source "$BIN/../lib/conf.sh"
 # The OCR text layer is the whole document in plain text -- the single most
 # sensitive artefact this pipeline produces.
 tr_guard_resolve_root \
   "The OCR text layer is full plaintext of the document; it must not be written outside the encrypted container."
+# The project's own settings, TR_OCR_LANGS among them. Without this, LANGS
+# below came from the environment alone: a hand-run in an English project
+# told ocrmypdf slv+eng and said so in its banner, while tr-ocrtext -- which
+# reads project.conf through trlib -- wrote the text layer in eng+slv.
+tr_load_conf "$TR_ROOT/project.conf"
 OCRDIR="$TR_ROOT/work/ocr"
 LANGS="${TR_OCR_LANGS:-slv+eng}"
 mkdir -p "$OCRDIR"
