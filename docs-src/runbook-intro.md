@@ -107,14 +107,49 @@ and set, before the first `tr-run`:
 | `TR_SRC=en`, `TR_TGT=de`, `TR_OCR_LANGS=eng` | English→German; `TR_TGT=de-CH` for Swiss German |
 | `TR_SUFFIX=auto` | Optional: each translation takes its language's label, `lease_German.docx` |
 
+**The OCR languages are the setting whose mistake is silent.** The others
+announce themselves: an unknown pair is refused, a missing model is refused,
+a changed suffix shows up in `tr-status` as a corpus of missing files. A
+wrong language list produces real words, at a confidence Tesseract is
+satisfied with, and the model translates them into fluent sentences nobody
+has reason to doubt.
+
+| `TR_OCR_LANGS` | The pages it fits |
+|---|---|
+| `slv+eng` | Slovene, with the English that turns up in it — what `tr-project --new` writes |
+| `eng+slv` | English in a Slovene matter: court names, stamps and statute titles stay readable |
+| `eng` | English, with nothing else on the page |
+| `eng+deu`, `slv+deu` | pages carrying German as well. German is never the source — `TR_SRC` is `sl` or `en` — and the target's flavor changes nothing here: `de`, `de-AT` and `de-CH` all read as `deu`, the one German Tesseract has |
+
+- **Name the languages actually on the page, the bulk of it first.** Tesseract
+  weights the first entry. On an English page carrying a Slovene court name,
+  `slv+eng` corrupted ordinary English words, `eng` alone mangled
+  `Okrožno sodišče`, and `eng+slv` read both.
+- **Keep the list short.** Each language added is another word list for a
+  doubtful shape to be matched against — another way to be confidently wrong
+  — and a slower pass over every page.
+- **Set it before step 6.** Text layers are cached, and nothing re-reads a
+  page because the setting changed. To redo one file, delete its two cached
+  files and run step 6 again:
+
+      rm work/ocr/<layer>.txt work/ocr/<layer>.ocr.pdf
+
+  `<layer>` is the file's path under `source/` without its extension, with
+  `/` written `__`: `drop2__prilogi__zapisnik` for
+  `source/drop2/prilogi/zapisnik.pdf`.
+- **`tesseract --list-langs` says what is installed** — here `deu`, `eng`,
+  `hrv`, `slv`, `srp` and `srp_latn`. A language that is not installed stops
+  the run with `Failed loading language`; nothing falls back to one that is.
+- Step 5 has a second, wider setting of its own: `TR_OCR_SAMPLE_LANGS`
+  (`slv+hrv+eng`), used only to sample a scanned page well enough to tell
+  which language its file is in. Breadth costs little there and a missing
+  language costs a misclassified file, so widen it before step 5 if a drop
+  holds something that list does not cover.
+
 Notes
 
 - Set the pair before step 5: triage keeps only the files in `TR_SRC`, and
   counts only those toward the volume.
-- `TR_OCR_LANGS` names the languages on the page, the one most of it is in
-  first. An English drop in a Slovene matter is `eng+slv`: with `slv+eng`
-  Tesseract read English words through Slovene and corrupted them, and with
-  `eng` alone it mangled `Okrožno sodišče`.
 - Decide the suffix before the first run as well. Changing it later gives
   every deliverable a new name: `tr-status` then lists each source as missing
   and its old translation as orphaned, and `tr-run` drafts them again under
