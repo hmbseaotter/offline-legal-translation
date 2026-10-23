@@ -1,0 +1,21 @@
+digraph wf {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fillcolor="#EEF2F7", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9];
+  open [label="1. case-open\ntr-project --new <name>", fillcolor="#FFF4E5"];
+  conf [label="2. Edit project.conf\nTR_SRC, TR_TGT, TR_OCR_LANGS, TR_SUFFIX"];
+  src  [label="3. Copy client drop into source/\n(folder tree preserved)"];
+  ref  [label="4. Optional: tr-refimport, tr-ref,\nread pairs.tsv, tr-terms --reference"];
+  inv  [label="5. tr-inventory\nclassify every file by language"];
+  cnt  [label="6. tr-inventory --count --with-ocr\nOCR scans once, size the job"];
+  chk  [label="7. tr-ocrstat (legibility)\nocr-check.py (two-engine numbers)"];
+  run  [label="8. tr-run -n, then tr-run\ndraft deliverables (resumable)", fillcolor="#E8F4EA"];
+  lint [label="9. tr-lint\nreviewer's worklist (no model)"];
+  terms[label="10. tr-terms --pin-all -> candidates.tsv\ntranslator copies chosen terms to\nproject.tsv; tr-run + tr-lint again"];
+  rev  [label="Translator edits translated/\n(edited files never overwritten)", fillcolor="#F2F2F2"];
+  del  [label="11. tr-status, then copy\nsource/ and translated/ to archive"];
+  close[label="12. cd ~ && case-close", fillcolor="#FFF4E5"];
+  open -> conf -> src -> ref -> inv -> cnt -> chk -> run -> lint -> terms -> rev -> del -> close;
+  chk -> cnt [label="stop band:\nrescan / better copies", style=dashed];
+  terms -> run [label="glossary changed:\nonly affected segments redrafted", style=dashed, constraint=false];
+}
