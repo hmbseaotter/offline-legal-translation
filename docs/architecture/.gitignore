@@ -1,0 +1,4 @@
+# Rendered output and build caches; only the sources are versioned.
+dist/
+diagrams/_png/
+render/node_modules/

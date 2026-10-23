@@ -1,0 +1,19 @@
+digraph guards {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fillcolor="#EEF2F7", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9];
+  closed [label="CLOSED\nmountpoint empty,\nchattr +i (immutable)", fillcolor="#E8F4EA"];
+  open   [label="OPEN\nLUKS mapped and mounted\ncase data reachable", fillcolor="#FFF4E5"];
+  cs [label="Claude Code\nmay run", fillcolor="#F2F2F2"];
+  closed -> open [label="case-open\nrefuses if any 'claude'\nprocess is running (pgrep)"];
+  open -> closed [label="case-close\nlsof check, umount,\nluksClose, chattr +i"];
+  g1 [label="case-guard\n(~/.local/sbin/claude on PATH)", fillcolor="#FBE3E3"];
+  g2 [label="case-guard-desktop\n(.desktop Exec override)", fillcolor="#FBE3E3"];
+  st [label="case-status\nreports state AND whether\neach guard is installed", fillcolor="#FFFFFF"];
+  g1 -> cs [label="exec real binary only if\nnot mounted, no plain files,\ncwd outside data tree"];
+  g2 -> cs [label="exec claude-desktop only\nif not mounted (dialog otherwise)"];
+  open -> g1 [label="blocks (exit 3)", color="#B03030", style=dashed];
+  open -> g2 [label="blocks (exit 3)", color="#B03030", style=dashed];
+  st -> closed [style=dotted, arrowhead=none];
+  st -> open [style=dotted, arrowhead=none];
+}

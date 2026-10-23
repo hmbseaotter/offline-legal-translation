@@ -1,0 +1,39 @@
+digraph arch {
+  rankdir=TB; compound=true; newrank=true;
+  node [shape=box, style="rounded,filled", fillcolor="#EEF2F7", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9];
+
+  subgraph cluster_kit {
+    label="Kit repository (no case data)  ~/Claude_Stuff/cli_projects/translation-tools"; fontname="Helvetica"; fontsize=11; style="rounded"; color="#4A6FA5";
+    cmds [label="bin/ commands\ntr-inventory, tr-run, tr-lint, tr-terms,\ntr-ref, tr-pdf, tr-status ..."];
+    workers [label="Format workers\ntr-docx | tr-xlsx | tr-txt | tr-pdf"];
+    lib [label="lib/trlib.py (core)\nsegmenting, glossary, locale,\nmemory, prompt, model client"];
+    trref [label="lib/trref.py\nreference alignment"];
+    trlang [label="lib/trlang.py\nlanguage detection"];
+    assets [label="prompts/  glossary/\nregistry.py"];
+    cmds -> workers; workers -> lib; cmds -> lib; lib -> trref; cmds -> trlang; lib -> assets [style=dashed];
+  }
+
+  subgraph cluster_box {
+    label="Local services (configured for 127.0.0.1)"; fontname="Helvetica"; fontsize=11; style="rounded,dashed"; color="#888888";
+    ollama [label="Ollama (127.0.0.1:11434)\ngams3:q8  sl<->en\neurollm9b-2512:q8  en<->de\ndeepseek-ocr:3b  (OCR check)", fillcolor="#E8F4EA"];
+    ocrtools [label="Tesseract / ocrmypdf\npoppler (pdftotext, pdftoppm)", fillcolor="#E8F4EA"];
+  }
+
+  subgraph cluster_data {
+    label="LUKS2 encrypted container  ~/translation-work/confidential-projects"; fontname="Helvetica"; fontsize=11; style="rounded,filled"; fillcolor="#FFF4E5"; color="#C77700";
+    proj [label="<project>/\nsource/  translated/  reference/\nwork/tm.sqlite  work/deliverables.tsv\nwork/ocr/  work/inventory/  logs/", fillcolor="#FFFFFF"];
+    shared [label="_shared/glossary/base.tsv\n.active", fillcolor="#FFFFFF"];
+  }
+
+  guards [label="Boundary guards\ncase-open / case-close / case-status\ncase-guard (PATH) / case-guard-desktop\n.claude/settings.json deny rules\n.githooks pre-commit", fillcolor="#FBE3E3"];
+  claude [label="Claude Code session\n(used to build the kit)", fillcolor="#F2F2F2"];
+
+  lib -> ollama [label="HTTP, localhost only"];
+  workers -> ocrtools;
+  lib -> proj [label="read/write\n(only when mounted)"];
+  lib -> shared;
+  guards -> proj [label="mount / unmount", style=bold, color="#C77700"];
+  guards -> claude [label="mutual exclusion", style=bold, color="#B03030", dir=both];
+  claude -> cmds [label="develops against\nfixtures only", style=dashed];
+}

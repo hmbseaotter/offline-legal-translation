@@ -1,0 +1,31 @@
+digraph seg {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fillcolor="#EEF2F7", fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  in [label="Source segment\n(one sentence / cell / line)", fillcolor="#FFFFFF"];
+  loc [label="Only a date, time or amount?\nlocalize() in code", shape=diamond, style="filled", fillcolor="#FFF4E5"];
+  tr  [label="Translatable?\n(letters, not a non-translatable\npattern)", shape=diamond, style="filled", fillcolor="#FFF4E5"];
+  ref [label="In a kept reference pair?\n(tr-ref)", shape=diamond, style="filled", fillcolor="#FFF4E5"];
+  tm  [label="In translation memory?\nkey = direction, model,\nprompt version, terms, text", shape=diamond, style="filled", fillcolor="#FFF4E5"];
+  llm [label="Ollama call (local)\nprompt + applicable glossary\ntemperature 0.1, length cap", fillcolor="#E8F4EA"];
+  chk [label="Reply checks\ncut off? implausibly long?\nnumbers added?", shape=diamond, style="filled", fillcolor="#FFF4E5"];
+  firm [label="One firmer retry\n'Translate only the text below'\n(added numbers only: keep the closer reply)"];
+  fin [label="finish_draft()\nnumber format, Swiss rules\nstore in tm.sqlite"];
+  fail [label="[TRANSLATION FAILED] <source>\nfile counts as failed", fillcolor="#FBE3E3"];
+  out [label="Segment text for the deliverable\n(Word/text workers add first-mention\ninstitution brackets; spreadsheets do not)", fillcolor="#FFFFFF"];
+  in -> loc;
+  loc -> out [label="yes: converted"];
+  loc -> tr [label="no"];
+  tr -> out [label="no: verbatim"];
+  tr -> ref [label="yes"];
+  ref -> out [label="yes: translator's words\nor REF_OPTIONS"];
+  ref -> tm [label="no"];
+  tm -> out [label="hit: refinish()"];
+  tm -> llm [label="miss"];
+  llm -> chk;
+  chk -> fin [label="ok"];
+  chk -> firm [label="suspicious"];
+  firm -> llm [style=dashed];
+  llm -> fail [label="retry also cut off or\nover-long, or errors x3", style=dashed];
+  fin -> out;
+}
